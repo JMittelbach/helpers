@@ -1,60 +1,60 @@
 # codex usage helper
 
-Kurzes Hilfsskript, das dir deinen Codex-Tokenverbrauch zeigt:
-- lokale Tokens aus `~/.codex/sessions/*.jsonl`
-- sofern erreichbar: Quota-Prozente/Reset-Zeit vom Server
+A small helper script that shows your Codex token usage:
+- local tokens from `~/.codex/sessions/*.jsonl`
+- if reachable: quota percentages/reset time from the server
 
-## Dateien
+## Files
 
-- `codex_usage.py`: Usage-Report
-- `Makefile`: schnelle Befehle
-- `install_alias.sh`: optionaler Alias-Installer (`tokens`)
+- `codex_usage.py`: usage report
+- `Makefile`: quick commands
+- `install_alias.sh`: optional alias installer (`tokens`)
 
-## Schnellstart
+## Quick start
 
 ```bash
 cd codex
 make run
 ```
 
-## Optional: Alias `tokens` setzen
+## Optional: set alias `tokens`
 
 ```bash
 cd codex
 make install-alias
 ```
 
-Das schreibt den Alias in:
-- `~/.zshrc` für zsh
-- `~/.bashrc` für bash
+This writes the alias to:
+- `~/.zshrc` for zsh
+- `~/.bashrc` for bash
 
-Danach ggf. neu laden:
+Then reload your shell config if needed:
 
 ```bash
 source ~/.zshrc
-# oder
+# or
 source ~/.bashrc
 ```
 
-## Login prüfen (Codex CLI)
+## Check login (Codex CLI)
 
 ```bash
 codex login status
 ```
 
-Typische Ausgabe:
+Typical output:
 
 ```text
 Logged in using ChatGPT
 ```
 
-Wenn nicht eingeloggt:
+If not logged in:
 
 ```bash
 codex login
 ```
 
-## Beispielausgabe
+## Example output
 
 ```text
 Codex quota
@@ -71,4 +71,4 @@ Last 5h      █░░░░░░░░░░░░░░░░░░░░░�
 Last 7d      █████░░░░░░░░░░░░░░░░░░░░░░░░░  586.914.314
 ```
 
-Hinweis: `no quota data` erscheint z. B. wenn gerade kein Serverzugriff möglich ist.
+Note: `no quota data` can appear when server access is currently unavailable.
