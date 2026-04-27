@@ -16,6 +16,21 @@ cd /Users/jannes/Github/helpers/scrna-finder
 PYTHONPATH=src python3 -m scrna_finder.cli --help
 ```
 
+## Conda-Only Setup (No pip for user)
+
+If you want conda-only usage, run:
+
+```bash
+cd /Users/jannes/Github/helpers/scrna-finder
+./scripts/setup_conda.sh
+conda activate scrna-finder
+scrna-finder
+```
+
+Notes:
+- no `pip install` command is needed by the user
+- the setup script creates a launcher command `scrna-finder` inside the conda env
+
 ## Quickstart
 
 ```bash
