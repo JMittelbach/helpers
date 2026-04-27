@@ -16,6 +16,10 @@ class AnnotationTests(unittest.TestCase):
         self.assertTrue(out["fine_t_hits"])
         self.assertGreaterEqual(float(out["confidence"]), 0.5)
 
+    def test_detects_lab_manual_annotation_evidence(self) -> None:
+        out = analyze_annotation_text("Expert curated labels validated by flow cytometry and manual curation.")
+        self.assertIn("lab_manual", out["methods"])
+
     def test_annotate_record_sets_fields(self) -> None:
         record = DatasetRecord(
             source="CELLXGENE",

@@ -31,6 +31,22 @@ Notes:
 - no `pip install` command is needed by the user
 - the setup script creates a launcher command `scrna-finder` inside the conda env
 
+### Same flow with `make`
+
+```bash
+cd /Users/jannes/Github/helpers/scrna-finder
+make conda-shell
+```
+
+This does setup and opens an interactive shell in the conda env.
+
+Useful variants:
+
+```bash
+make conda-run
+make conda-shell CONDA_ENV=my-scrna-env PYTHON_VERSION=3.12
+```
+
 ## Quickstart
 
 ```bash
@@ -70,13 +86,19 @@ PYTHONPATH=src python3 -m scrna_finder.cli easy
 ```
 
 The wizard asks for:
-- preset mode (`PBMC Schnellstart`, `PBMC + feine T-Zellen`, `Freie Suche`)
+- preset mode (`PBMC Quick Start`, `PBMC + Fine T-cell (Strict)`, `Custom Search`)
 - query text
 - source databases (`geo`, `sra`, `cellxgene`, also by numbers `1,2,3`)
-- organism, year, cell types
-- annotation constraints (`seurat`, `singler`, etc.)
+- cell types (or `all` for no cell-type filter)
 - summary + confirmation before run
 - optional file manifest + optional direct download
+
+The wizard now applies these defaults automatically (no extra prompts):
+- organism is fixed to `Homo sapiens`
+- no year filter
+- no annotation-confidence prompt
+- fine T-cell subtype requirement is always enabled
+- manual/lab annotation mode is always enabled and software-annotated datasets are excluded
 
 ## PBMC + Fine T-Cell Focus
 
@@ -147,10 +169,10 @@ Runs built-in benchmark cases for:
 ## Main Search Options
 
 - `--source geo --source sra --source cellxgene`: choose one or multiple dataset sources (default: all)
-- `--cell-type ...`: repeatable, alias-aware cell-type filter (`T-cell`, `tcell`, `CD8+ T`, etc.)
+- `--cell-type ...`: repeatable, alias-aware cell-type filter (`T-cell`, `tcell`, `CD8+ T`, etc.); use `--cell-type all` to disable cell-type filtering
 - `--cell-mode any|all`: combine repeated cell types
 - `--require-annotation`: keep only datasets with annotation evidence
-- `--annotation-method`: require a method hit (e.g. `seurat`, `singler`, `celltypist`, `azimuth`, `scanvi`)
+- `--annotation-method`: require a method hit (e.g. `seurat`, `singler`, `celltypist`, `azimuth`, `scanvi`, `lab`, `manual`)
 - `--require-fine-tcell`: require fine-grained T-cell subtype signals (`naive`, `memory`, `Treg`, `exhausted`, etc.)
 - `--min-annotation-confidence`: confidence threshold for inferred annotation quality
 - `--show-annotation-details`: print methods/evidence/signal source (`title`, `summary`, `paper_title`)
@@ -163,6 +185,7 @@ Runs built-in benchmark cases for:
 - Relevance score is keyword-based to rank likely scRNA/snrna datasets.
 - Cell-type filter is not limited to T-cells. It supports many groups (`B-cell`, `NK`, `monocyte`, `dendritic`, `platelet`, `megakaryocyte`, `erythrocyte`, `fibroblast`, `epithelial`, `endothelial`, etc.) with typo-tolerant matching for common misspellings.
 - Annotation signals are inferred heuristically from metadata and (if available) linked paper titles.
+- Manual/lab-style annotation evidence is surfaced when terms like `manual curation`, `flow cytometry`, or `expert curated` are detected.
 - If linked PubMed IDs are available, the output includes a PMID/URL hint per dataset.
 - For strict method provenance, inspect the linked paper methods section or supplementary metadata.
 - For higher throughput at NCBI, set `NCBI_API_KEY`.

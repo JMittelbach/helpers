@@ -18,6 +18,18 @@ from .search_engine import SUPPORTED_SOURCES, normalize_sources, search_datasets
 
 DEFAULT_EASY_RESULTS = "search_results.csv"
 DEFAULT_EASY_MANIFEST = "files_manifest.csv"
+ALL_CELL_TYPE_INPUTS = {
+    "all",
+    "all cell types",
+    "all cells",
+    "any",
+    "no filter",
+    "none",
+    "*",
+    "alle",
+}
+YES_NO_INPUTS = {"y", "yes", "j", "ja", "n", "no", "nein"}
+ORGANISM_NO_FILTER_INPUTS = {"all", "any", "none", "no filter", "*", "-"}
 
 
 def _shorten(text: str, width: int) -> str:
@@ -99,8 +111,9 @@ def _print_search_overview(args: argparse.Namespace, selected_sources: list[str]
     print(f"Annotation required: {'yes' if args.require_annotation else 'no'}")
     print(f"Min annotation conf: {args.min_annotation_confidence:.2f}")
     print(f"Annotation methods: {', '.join(args.annotation_method) if args.annotation_method else '-'}")
+    print(f"Manual/lab only annotation mode: {'yes' if getattr(args, 'manual_lab_only', False) else 'no'}")
     print(f"Require fine T-cell annotation: {'yes' if args.require_fine_tcell else 'no'}")
-    print(f"Cell types: {', '.join(args.cell_type) if args.cell_type else '-'}")
+    print(f"Cell types: {', '.join(args.cell_type) if args.cell_type else 'all (no filter)'}")
     print(f"Cell mode: {args.cell_mode if args.cell_type else '-'}")
     print("")
 
@@ -176,6 +189,50 @@ def _print_recent_papers(papers: list, limit: int) -> None:
         print(f"{idx:>3}  {year:>4} {p.pmid:<10} {journal:<24} {title}")
 
 
+def _print_zero_match_diagnostics(args: argparse.Namespace, all_records: list) -> None:
+    if not all_records:
+        return
+
+    print("")
+    print("=== Zero-Match Diagnostics ===")
+    print("Your filters are currently too strict for this result set.")
+
+    def _count_with_overrides(**overrides: object) -> int:
+        return len(
+            filter_records(
+                all_records,
+                organism=overrides.get("organism", args.organism),
+                since_year=overrides.get("since_year", args.since_year),
+                must_contain=overrides.get("must_contain", args.must_contain),
+                exclude=overrides.get("exclude", args.exclude),
+                min_score=overrides.get("min_score", args.min_score),
+                cell_types=overrides.get("cell_types", args.cell_type),
+                cell_mode=overrides.get("cell_mode", args.cell_mode),
+                require_annotation=overrides.get("require_annotation", args.require_annotation),
+                min_annotation_confidence=overrides.get("min_annotation_confidence", args.min_annotation_confidence),
+                annotation_methods=overrides.get("annotation_methods", args.annotation_method),
+                require_fine_tcell=overrides.get("require_fine_tcell", args.require_fine_tcell),
+                manual_lab_only=overrides.get("manual_lab_only", getattr(args, "manual_lab_only", False)),
+            )
+        )
+
+    if args.organism:
+        print(f"- Without organism filter: {_count_with_overrides(organism=None)} matches")
+    if args.require_fine_tcell:
+        print(f"- Without fine T-cell requirement: {_count_with_overrides(require_fine_tcell=False)} matches")
+    if args.annotation_method:
+        print(f"- Without annotation-method constraint: {_count_with_overrides(annotation_methods=[])} matches")
+    if args.min_annotation_confidence > 0.0:
+        print(f"- With annotation confidence >= 0.0: {_count_with_overrides(min_annotation_confidence=0.0)} matches")
+    if args.require_annotation:
+        print(
+            "- Without annotation constraints (method/confidence/fine T-cell): "
+            f"{_count_with_overrides(require_annotation=False, min_annotation_confidence=0.0, annotation_methods=[], require_fine_tcell=False)} matches"
+        )
+    if getattr(args, "manual_lab_only", False):
+        print(f"- Without manual/lab-only mode: {_count_with_overrides(manual_lab_only=False)} matches")
+
+
 def _print_benchmark(results: dict[str, object]) -> None:
     print("")
     print("=== Internal Evaluation ===")
@@ -210,14 +267,14 @@ def _prompt_text(prompt: str, default: str | None = None) -> str:
 
 
 def _prompt_yes_no(prompt: str, default_yes: bool = False) -> bool:
-    default = "j" if default_yes else "n"
+    default = "y" if default_yes else "n"
     while True:
-        raw = _prompt_text(f"{prompt} (j/n)", default=default).strip().lower()
+        raw = _prompt_text(f"{prompt} (y/n)", default=default).strip().lower()
         if raw in {"j", "ja", "y", "yes"}:
             return True
         if raw in {"n", "nein", "no"}:
             return False
-        print("Bitte 'j' oder 'n' eingeben.")
+        print("Please enter 'y' or 'n'.")
 
 
 def _prompt_choice(prompt: str, options: list[tuple[str, str]], default_key: str) -> str:
@@ -227,13 +284,57 @@ def _prompt_choice(prompt: str, options: list[tuple[str, str]], default_key: str
         for key, _label in options:
             if raw == key.lower():
                 return key
-        print("Bitte eine gueltige Option auswaehlen.")
+        print("Please choose a valid option.")
 
 
 def _parse_csv_tokens(text: str) -> list[str]:
     if not text.strip():
         return []
     return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _normalize_cell_type_filters(tokens: list[str]) -> list[str]:
+    parsed: list[str] = []
+    for token in tokens:
+        parsed.extend(_parse_csv_tokens(token))
+    if not parsed:
+        return []
+    lowered = {token.strip().lower() for token in parsed if token.strip()}
+    if lowered.intersection(ALL_CELL_TYPE_INPUTS):
+        return []
+    return parsed
+
+
+def _parse_cell_types_input(text: str) -> list[str]:
+    return _normalize_cell_type_filters([text])
+
+
+def _sanitize_organism_filter(raw: str | None) -> tuple[str | None, bool]:
+    if raw is None:
+        return None, False
+    cleaned = raw.strip()
+    if not cleaned:
+        return None, False
+    lowered = cleaned.lower()
+    if lowered in ORGANISM_NO_FILTER_INPUTS:
+        return None, False
+    if lowered in YES_NO_INPUTS:
+        return None, True
+    return cleaned, False
+
+
+def _prompt_organism(default: str | None) -> str | None:
+    default_value = default if default not in (None, "") else None
+    while True:
+        raw = _prompt_text(
+            "Organism (e.g. Homo sapiens; type 'none' for no organism filter)",
+            default=default_value,
+        )
+        organism, looks_like_yes_no = _sanitize_organism_filter(raw)
+        if looks_like_yes_no:
+            print("Please enter an organism name (e.g. Homo sapiens), not yes/no.")
+            continue
+        return organism
 
 
 def _parse_sources_input(text: str) -> list[str]:
@@ -274,7 +375,7 @@ def _prompt_int(prompt: str, default: int, allow_empty: bool = True) -> int | No
         try:
             return int(raw)
         except ValueError:
-            print("Bitte eine ganze Zahl eingeben.")
+            print("Please enter an integer.")
 
 
 def _prompt_year(prompt: str, default: str = "") -> int | None:
@@ -285,10 +386,10 @@ def _prompt_year(prompt: str, default: str = "") -> int | None:
         try:
             year = int(raw)
         except ValueError:
-            print("Bitte ein Jahr als Zahl eingeben, z.B. 2021.")
+            print("Please enter a year as a number, e.g. 2021.")
             continue
         if year < 1990 or year > 2100:
-            print("Bitte ein sinnvolles Jahr zwischen 1990 und 2100 eingeben.")
+            print("Please enter a reasonable year between 1990 and 2100.")
             continue
         return year
 
@@ -299,10 +400,10 @@ def _prompt_float_01(prompt: str, default: float) -> float:
         try:
             value = float(raw)
         except ValueError:
-            print("Bitte eine Zahl zwischen 0 und 1 eingeben.")
+            print("Please enter a value between 0 and 1.")
             continue
         if value < 0.0 or value > 1.0:
-            print("Bitte eine Zahl zwischen 0 und 1 eingeben.")
+            print("Please enter a value between 0 and 1.")
             continue
         return value
 
@@ -310,7 +411,7 @@ def _prompt_float_01(prompt: str, default: float) -> float:
 def _easy_preset_defaults(key: str) -> dict[str, object]:
     if key == "1":
         return {
-            "label": "PBMC Schnellstart",
+            "label": "PBMC Quick Start",
             "query": "pbmc immune atlas",
             "sources": ["geo", "sra", "cellxgene"],
             "organism": "Homo sapiens",
@@ -325,7 +426,7 @@ def _easy_preset_defaults(key: str) -> dict[str, object]:
         }
     if key == "2":
         return {
-            "label": "PBMC + feine T-Zellen (streng)",
+            "label": "PBMC + Fine T-cell (Strict)",
             "query": "pbmc t cell atlas",
             "sources": ["cellxgene", "geo", "sra"],
             "organism": "Homo sapiens",
@@ -339,7 +440,7 @@ def _easy_preset_defaults(key: str) -> dict[str, object]:
             "literature_global": True,
         }
     return {
-        "label": "Freie Suche",
+        "label": "Custom Search",
         "query": "",
         "sources": ["geo", "sra", "cellxgene"],
         "organism": "Homo sapiens",
@@ -355,91 +456,73 @@ def _easy_preset_defaults(key: str) -> dict[str, object]:
 
 
 def _print_easy_summary(args: argparse.Namespace, preset_label: str) -> None:
-    _print_section("Zusammenfassung")
+    _print_section("Summary")
     print(f"Preset: {preset_label}")
     print(f"Query: {args.query}")
-    print(f"Datenbanken: {', '.join(str(x).upper() for x in args.source)}")
-    print(f"Organismus: {args.organism or '-'}")
-    print(f"Jahr >= : {args.since_year if args.since_year is not None else '-'}")
-    print(f"Zelltypen: {', '.join(args.cell_type) if args.cell_type else '-'}")
-    print(f"Nur Annotation: {'ja' if args.require_annotation else 'nein'}")
-    print(f"Min Annotation-Confidence: {args.min_annotation_confidence:.2f}")
-    print(f"Methoden: {', '.join(args.annotation_method) if args.annotation_method else '-'}")
-    print(f"Feine T-Zellen: {'ja' if args.require_fine_tcell else 'nein'}")
-    print(f"Datensatz-Literatur: {'ja' if args.search_literature else 'nein'}")
-    print(f"Globale Literatur: {'ja' if args.literature_global else 'nein'}")
-    print(f"Vorschau-Zeilen: {args.preview}")
-    print(f"Ausgabe-Datei: {args.out}")
+    print(f"Databases: {', '.join(str(x).upper() for x in args.source)}")
+    print(f"Organism: {args.organism or '-'}")
+    print("Year filter: off")
+    print(f"Cell types: {', '.join(args.cell_type) if args.cell_type else 'all (no filter)'}")
+    print("Annotation confidence filter: off")
+    print("Annotation method prompt: off")
+    print(f"Manual/lab only annotation mode: {'yes' if args.manual_lab_only else 'no'}")
+    print(f"Require fine T-cell detail: {'yes' if args.require_fine_tcell else 'no'}")
+    print(f"Dataset-linked literature: {'yes' if args.search_literature else 'no'}")
+    print(f"Global literature: {'yes' if args.literature_global else 'no'}")
+    print(f"Preview rows: {args.preview}")
+    print(f"Output file: {args.out}")
 
 
 def _build_search_args_for_easy() -> argparse.Namespace:
-    _print_section("Interaktiver Suchmodus")
-    print("Beantworte nur die Fragen. Der Rest wird automatisch gesetzt.")
-    print("Du kannst jederzeit mit Ctrl+C abbrechen.")
+    _print_section("Interactive Search Mode")
+    print("Answer a few questions and the rest is configured for you.")
+    print("Press Ctrl+C any time to cancel.")
 
     preset_key = _prompt_choice(
-        "Waehle einen Startmodus",
-        options=[("1", "PBMC Schnellstart"), ("2", "PBMC + feine T-Zellen (streng)"), ("3", "Freie Suche")],
+        "Choose a start mode",
+        options=[("1", "PBMC Quick Start"), ("2", "PBMC + Fine T-cell (Strict)"), ("3", "Custom Search")],
         default_key="1",
     )
     preset = _easy_preset_defaults(preset_key)
 
     query_default = str(preset["query"])
-    query = _prompt_text("Was willst du suchen? (z.B. pbmc immune atlas)", default=query_default).strip()
+    query = _prompt_text("What do you want to search? (e.g. pbmc immune atlas)", default=query_default).strip()
     while not query:
-        print("Die Suche braucht einen Text.")
-        query = _prompt_text("Was willst du suchen?", default=query_default).strip()
+        print("A query is required.")
+        query = _prompt_text("What do you want to search?", default=query_default).strip()
 
     source_default = ",".join(str(x) for x in preset["sources"])
     source_text = _prompt_text(
-        "Welche Datenbanken? (all oder 1,2,3 oder geo,sra,cellxgene)",
+        "Which databases? (all or 1,2,3 or geo,sra,cellxgene)",
         default=source_default,
     )
     sources = _parse_sources_input(source_text)
 
-    organism = _prompt_text("Organismus", default=str(preset["organism"])).strip() or None
-    since_year = _prompt_year("Ab welchem Jahr? (leer = kein Filter)", default=str(preset["since_year"] or ""))
-    cell_types = _parse_csv_tokens(
+    cell_types = _parse_cell_types_input(
         _prompt_text(
-            "Zelltypen (kommagetrennt, z.B. T-cell,CD8+ T)",
+            "Cell types (comma-separated, or 'all' for no cell-type filter)",
             default=",".join(str(x) for x in preset["cell_types"]),
         )
     )
-
-    require_annotation = _prompt_yes_no(
-        "Nur annotierte Datensaetze?",
-        default_yes=bool(preset["require_annotation"]),
-    )
+    organism = "Homo sapiens"
+    since_year = None
+    require_annotation = False
     min_annotation_confidence = 0.0
     annotation_methods: list[str] = []
-    require_fine_tcell = False
-    if require_annotation:
-        min_annotation_confidence = _prompt_float_01(
-            "Min Annotation-Confidence (0-1)",
-            default=float(preset["min_annotation_confidence"]),
-        )
-        annotation_methods = _parse_csv_tokens(
-            _prompt_text(
-                "Methoden optional (z.B. seurat,singler,celltypist)",
-                default=",".join(str(x) for x in preset["annotation_methods"]),
-            )
-        )
-        require_fine_tcell = _prompt_yes_no(
-            "Feine T-Zell Subtypen verlangen?",
-            default_yes=bool(preset["require_fine_tcell"]),
-        )
+    require_fine_tcell = True
+    manual_lab_only = True
 
     search_literature = _prompt_yes_no(
-        "Datensatz-verknuepfte Literatur suchen?",
+        "Search dataset-linked literature?",
         default_yes=bool(preset["search_literature"]),
     )
     literature_global = _prompt_yes_no(
-        "Zusatz: aktuelle query-basierte PubMed-Literatur zeigen?",
+        "Also show recent query-based PubMed papers?",
         default_yes=bool(preset["literature_global"]),
     )
-    show_annotation_details = _prompt_yes_no("Detailtabelle fuer Annotation anzeigen?", default_yes=True)
-    preview = _prompt_int("Wie viele Treffer in der Konsole anzeigen?", default=20, allow_empty=False) or 20
-    out = _prompt_text("Ergebnisdatei", default=DEFAULT_EASY_RESULTS).strip() or DEFAULT_EASY_RESULTS
+    show_annotation_details = _prompt_yes_no("Show annotation details table?", default_yes=True)
+    preview = _prompt_int("How many rows to show in the console?", default=20, allow_empty=False) or 20
+    out = _prompt_text("Output file", default=DEFAULT_EASY_RESULTS).strip() or DEFAULT_EASY_RESULTS
 
     args = argparse.Namespace(
         query=query,
@@ -456,6 +539,7 @@ def _build_search_args_for_easy() -> argparse.Namespace:
         min_annotation_confidence=min_annotation_confidence,
         annotation_method=annotation_methods,
         require_fine_tcell=require_fine_tcell,
+        manual_lab_only=manual_lab_only,
         email=None,
         api_key=None,
         no_scrna_clause=False,
@@ -469,7 +553,7 @@ def _build_search_args_for_easy() -> argparse.Namespace:
         preview=preview,
     )
     _print_easy_summary(args=args, preset_label=str(preset["label"]))
-    if not _prompt_yes_no("Suche jetzt starten?", default_yes=True):
+    if not _prompt_yes_no("Start search now?", default_yes=True):
         raise KeyboardInterrupt
     return args
 
@@ -477,12 +561,12 @@ def _build_search_args_for_easy() -> argparse.Namespace:
 def _run_easy_followup(args: argparse.Namespace) -> int:
     if not args.out:
         return 0
-    _print_section("Naechste Schritte")
-    if not _prompt_yes_no("Dateien fuer gefundene Datensaetze jetzt aufloesen?", default_yes=False):
+    _print_section("Next Steps")
+    if not _prompt_yes_no("Resolve downloadable files for matched datasets now?", default_yes=False):
         return 0
 
-    manifest_out = _prompt_text("Manifest-Datei", default=DEFAULT_EASY_MANIFEST).strip() or DEFAULT_EASY_MANIFEST
-    include_tokens = _parse_csv_tokens(_prompt_text("Datei-Filter include (z.B. .h5ad,.mtx)", default=".h5ad"))
+    manifest_out = _prompt_text("Manifest output file", default=DEFAULT_EASY_MANIFEST).strip() or DEFAULT_EASY_MANIFEST
+    include_tokens = _parse_csv_tokens(_prompt_text("Include filename tokens (e.g. .h5ad,.mtx)", default=".h5ad"))
     list_args = argparse.Namespace(
         input=args.out,
         out=manifest_out,
@@ -492,11 +576,11 @@ def _run_easy_followup(args: argparse.Namespace) -> int:
     )
     run_list_files(list_args)
 
-    if not _prompt_yes_no("Manifest-Dateien jetzt herunterladen?", default_yes=False):
+    if not _prompt_yes_no("Download files from manifest now?", default_yes=False):
         return 0
 
-    dest = _prompt_text("Zielordner fuer Downloads", default="./downloads").strip() or "./downloads"
-    max_files_raw = _prompt_text("Maximale Dateien (0 = alle)", default="20").strip()
+    dest = _prompt_text("Download destination folder", default="./downloads").strip() or "./downloads"
+    max_files_raw = _prompt_text("Maximum files (0 = all)", default="20").strip()
     try:
         max_files = int(max_files_raw)
     except ValueError:
@@ -522,11 +606,16 @@ def run_easy(args: argparse.Namespace | None = None) -> int:
         return _run_easy_followup(search_args)
     except (EOFError, KeyboardInterrupt):
         print("")
-        print("Abgebrochen.")
+        print("Cancelled.")
         return 130
 
 
 def run_search(args: argparse.Namespace) -> int:
+    args.cell_type = _normalize_cell_type_filters(args.cell_type or [])
+    args.manual_lab_only = bool(getattr(args, "manual_lab_only", False))
+    args.organism, organism_yes_no_guard = _sanitize_organism_filter(args.organism)
+    if organism_yes_no_guard:
+        print("Warning: organism filter looked like yes/no and was ignored.")
     api_key = args.api_key or os.getenv("NCBI_API_KEY")
     selected_sources = normalize_sources(args.source)
     report = search_datasets_report(
@@ -553,6 +642,7 @@ def run_search(args: argparse.Namespace) -> int:
         min_annotation_confidence=args.min_annotation_confidence,
         annotation_methods=args.annotation_method,
         require_fine_tcell=args.require_fine_tcell,
+        manual_lab_only=args.manual_lab_only,
     )
 
     _print_search_overview(
@@ -563,6 +653,8 @@ def run_search(args: argparse.Namespace) -> int:
         records=all_records,
     )
     _print_results(filtered, limit=args.preview)
+    if not filtered and all_records:
+        _print_zero_match_diagnostics(args, all_records)
     if args.show_annotation_details:
         _print_annotation_details(filtered, limit=args.preview)
 
@@ -681,7 +773,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="cmd", required=False)
 
-    easy = sub.add_parser("easy", help="Interaktiver Wizard: fragt Schritt fuer Schritt nach Suchwuenschen.")
+    easy = sub.add_parser("easy", help="Interactive wizard: step-by-step prompts for your search.")
     easy.set_defaults(func=run_easy)
 
     search = sub.add_parser("search", help="Search GEO/SRA/CELLxGENE datasets and filter results.")
@@ -700,7 +792,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--cell-type",
         action="append",
         default=[],
-        help="Cell type to filter on (repeatable). Accepts aliases like 'T-cell', 'CD8+ T', 'fibroblast'.",
+        help="Cell type to filter on (repeatable). Use 'all' to disable cell-type filtering.",
     )
     search.add_argument(
         "--cell-mode",
@@ -726,7 +818,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--annotation-method",
         action="append",
         default=[],
-        help="Require at least one annotation method hit (repeatable), e.g. seurat, singler, celltypist, azimuth.",
+        help="Require at least one annotation method hit (repeatable), e.g. seurat, singler, celltypist, lab, manual.",
+    )
+    search.add_argument(
+        "--manual-lab-only",
+        action="store_true",
+        help="Keep only datasets with manual/lab annotation signals and exclude software-annotated datasets.",
     )
     search.add_argument(
         "--require-fine-tcell",

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export PYTHONPATH="/Users/jannes/Github/helpers/scrna-finder/src${PYTHONPATH:+:${PYTHONPATH}}"
+exec conda run -n "scrna-finder" python -m scrna_finder.cli "$@"

@@ -22,6 +22,15 @@ ANNOTATION_METHOD_KEYWORDS: dict[str, list[str]] = {
     "harmony": ["harmony integration", "harmony"],
     "cell_ontology": ["cell ontology", "cl ontology"],
     "marker_based": ["marker gene", "canonical marker", "marker-based", "manual annotation"],
+    "lab_manual": [
+        "manual curation",
+        "expert curated",
+        "expert review",
+        "manual gating",
+        "flow cytometry",
+        "facs",
+        "ground truth",
+    ],
 }
 
 ANNOTATION_QUALITY_KEYWORDS = [
