@@ -9,7 +9,7 @@ help:
 	@echo "Targets:"
 	@echo "  make conda-setup              # create/update conda env + launcher"
 	@echo "  make conda-shell              # setup env and open interactive shell in env"
-	@echo "  make conda-run                # setup env and start scrna-finder wizard"
+	@echo "  make conda-run                # setup env and run fixed PBMC search profile"
 	@echo "  make test                     # run local unit tests"
 	@echo ""
 	@echo "Variables:"

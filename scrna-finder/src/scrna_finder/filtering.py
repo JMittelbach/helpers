@@ -82,10 +82,39 @@ SOFTWARE_ANNOTATION_METHODS = {
     "harmony",
     "cell_ontology",
 }
+TCELL_PURE_POSITIVE_HINTS = [
+    "sorted t cell",
+    "sorted t cells",
+    "purified t cell",
+    "purified t cells",
+    "isolated t cell",
+    "isolated t cells",
+    "t cell only",
+    "t cells only",
+    "cd3 positive t",
+    "cd4 positive t",
+    "cd8 positive t",
+    "enriched t cell",
+]
+TCELL_PURE_NEGATIVE_HINTS = [
+    "pbmc",
+    "peripheral blood mononuclear",
+    "b cell",
+    "nk cell",
+    "monocyte",
+    "dendritic",
+    "macrophage",
+    "neutrophil",
+    "myeloid",
+    "mixed immune",
+    "multi lineage",
+    "whole blood",
+]
 
 
 def _normalize_phrase(text: str) -> str:
     lowered = (text or "").strip().lower()
+    lowered = lowered.replace("+", " positive ")
     lowered = re.sub(r"[/_\-]+", " ", lowered)
     lowered = re.sub(r"\s+", " ", lowered).strip()
     return lowered
@@ -129,6 +158,15 @@ def _normalize_cell_type_filters(cell_types: list[str]) -> list[str]:
     return out
 
 
+def _looks_like_tcell_pure(text: str) -> bool:
+    normalized = _normalize_phrase(text)
+    if not normalized:
+        return False
+    has_positive = any(h in normalized for h in TCELL_PURE_POSITIVE_HINTS)
+    has_negative = any(h in normalized for h in TCELL_PURE_NEGATIVE_HINTS)
+    return has_positive and not has_negative
+
+
 def filter_records(
     records: Iterable[DatasetRecord],
     organism: str | None = None,
@@ -143,6 +181,7 @@ def filter_records(
     annotation_methods: list[str] | None = None,
     require_fine_tcell: bool = False,
     manual_lab_only: bool = False,
+    require_tcell_pure: bool = False,
 ) -> list[DatasetRecord]:
     must_contain = must_contain or []
     exclude = exclude or []
@@ -169,6 +208,8 @@ def filter_records(
             if not matched:
                 continue
             r.cell_type_hits = "; ".join(hits)
+        if require_tcell_pure and not _looks_like_tcell_pure(text_blob):
+            continue
         if must_contain and not _contains_all(text_blob, must_contain):
             continue
         if exclude and _contains_any(text_blob, exclude):

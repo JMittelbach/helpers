@@ -183,6 +183,36 @@ class FilteringAnnotationTests(unittest.TestCase):
         )
         self.assertEqual([x.accession for x in out], ["d_manual"])
 
+    def test_require_tcell_pure_uses_strict_text_hints(self) -> None:
+        pure_like = DatasetRecord(
+            source="GEO",
+            accession="d_pure",
+            title="FACS sorted CD3+ T cells from healthy donors",
+            summary="Purified T cell population with single-cell RNA-seq.",
+            organism="Homo sapiens",
+            pubdate="2024",
+            n_samples=50,
+            relevance_score=0.8,
+            geo_url="",
+            supplementary_dir="",
+            user_query="",
+        )
+        mixed_pbmc = DatasetRecord(
+            source="GEO",
+            accession="d_mixed",
+            title="PBMC atlas with T cells, B cells and monocytes",
+            summary="Peripheral blood mononuclear cells profiled by scRNA-seq.",
+            organism="Homo sapiens",
+            pubdate="2024",
+            n_samples=50,
+            relevance_score=0.8,
+            geo_url="",
+            supplementary_dir="",
+            user_query="",
+        )
+        out = filter_records([pure_like, mixed_pbmc], require_tcell_pure=True)
+        self.assertEqual([x.accession for x in out], ["d_pure"])
+
 
 if __name__ == "__main__":
     unittest.main()

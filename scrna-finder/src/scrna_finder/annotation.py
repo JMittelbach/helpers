@@ -23,12 +23,20 @@ ANNOTATION_METHOD_KEYWORDS: dict[str, list[str]] = {
     "cell_ontology": ["cell ontology", "cl ontology"],
     "marker_based": ["marker gene", "canonical marker", "marker-based", "manual annotation"],
     "lab_manual": [
+        "manual annotation",
         "manual curation",
         "expert curated",
         "expert review",
         "manual gating",
         "flow cytometry",
         "facs",
+        "facs sorted",
+        "cell sorting",
+        "sorted cells",
+        "immunophenotyping",
+        "marker validated",
+        "hand curated",
+        "curated annotation",
         "ground truth",
     ],
 }
@@ -48,6 +56,11 @@ ANNOTATION_QUALITY_KEYWORDS = [
     "cross validation",
     "benchmark",
     "ground truth",
+    "immunophenotyping",
+    "cell sorting",
+    "facs sorted",
+    "marker validated",
+    "hand curated",
 ]
 
 FINE_TCELL_KEYWORDS = [

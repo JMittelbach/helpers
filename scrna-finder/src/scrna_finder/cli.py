@@ -18,6 +18,7 @@ from .search_engine import SUPPORTED_SOURCES, normalize_sources, search_datasets
 
 DEFAULT_EASY_RESULTS = "search_results.csv"
 DEFAULT_EASY_MANIFEST = "files_manifest.csv"
+DEFAULT_PROJECT_QUERY = "pbmc"
 ALL_CELL_TYPE_INPUTS = {
     "all",
     "all cell types",
@@ -113,8 +114,10 @@ def _print_search_overview(args: argparse.Namespace, selected_sources: list[str]
     print(f"Annotation methods: {', '.join(args.annotation_method) if args.annotation_method else '-'}")
     print(f"Manual/lab only annotation mode: {'yes' if getattr(args, 'manual_lab_only', False) else 'no'}")
     print(f"Require fine T-cell annotation: {'yes' if args.require_fine_tcell else 'no'}")
+    print(f"Require likely ~100% T-cell datasets: {'yes' if getattr(args, 'require_tcell_pure', False) else 'no'}")
     print(f"Cell types: {', '.join(args.cell_type) if args.cell_type else 'all (no filter)'}")
     print(f"Cell mode: {args.cell_mode if args.cell_type else '-'}")
+    print(f"Max results per source: {args.max_results}")
     print("")
 
 
@@ -213,6 +216,7 @@ def _print_zero_match_diagnostics(args: argparse.Namespace, all_records: list) -
                 annotation_methods=overrides.get("annotation_methods", args.annotation_method),
                 require_fine_tcell=overrides.get("require_fine_tcell", args.require_fine_tcell),
                 manual_lab_only=overrides.get("manual_lab_only", getattr(args, "manual_lab_only", False)),
+                require_tcell_pure=overrides.get("require_tcell_pure", getattr(args, "require_tcell_pure", False)),
             )
         )
 
@@ -231,6 +235,8 @@ def _print_zero_match_diagnostics(args: argparse.Namespace, all_records: list) -
         )
     if getattr(args, "manual_lab_only", False):
         print(f"- Without manual/lab-only mode: {_count_with_overrides(manual_lab_only=False)} matches")
+    if getattr(args, "require_tcell_pure", False):
+        print(f"- Without ~100% T-cell requirement: {_count_with_overrides(require_tcell_pure=False)} matches")
 
 
 def _print_benchmark(results: dict[str, object]) -> None:
@@ -467,6 +473,7 @@ def _print_easy_summary(args: argparse.Namespace, preset_label: str) -> None:
     print("Annotation method prompt: off")
     print(f"Manual/lab only annotation mode: {'yes' if args.manual_lab_only else 'no'}")
     print(f"Require fine T-cell detail: {'yes' if args.require_fine_tcell else 'no'}")
+    print(f"Require likely ~100% T-cell datasets: {'yes' if args.require_tcell_pure else 'no'}")
     print(f"Dataset-linked literature: {'yes' if args.search_literature else 'no'}")
     print(f"Global literature: {'yes' if args.literature_global else 'no'}")
     print(f"Preview rows: {args.preview}")
@@ -475,58 +482,28 @@ def _print_easy_summary(args: argparse.Namespace, preset_label: str) -> None:
 
 def _build_search_args_for_easy() -> argparse.Namespace:
     _print_section("Interactive Search Mode")
-    print("Answer a few questions and the rest is configured for you.")
-    print("Press Ctrl+C any time to cancel.")
+    print("Starting fixed PBMC profile.")
 
-    preset_key = _prompt_choice(
-        "Choose a start mode",
-        options=[("1", "PBMC Quick Start"), ("2", "PBMC + Fine T-cell (Strict)"), ("3", "Custom Search")],
-        default_key="1",
-    )
-    preset = _easy_preset_defaults(preset_key)
-
-    query_default = str(preset["query"])
-    query = _prompt_text("What do you want to search? (e.g. pbmc immune atlas)", default=query_default).strip()
-    while not query:
-        print("A query is required.")
-        query = _prompt_text("What do you want to search?", default=query_default).strip()
-
-    source_default = ",".join(str(x) for x in preset["sources"])
-    source_text = _prompt_text(
-        "Which databases? (all or 1,2,3 or geo,sra,cellxgene)",
-        default=source_default,
-    )
-    sources = _parse_sources_input(source_text)
-
-    cell_types = _parse_cell_types_input(
-        _prompt_text(
-            "Cell types (comma-separated, or 'all' for no cell-type filter)",
-            default=",".join(str(x) for x in preset["cell_types"]),
-        )
-    )
+    query = DEFAULT_PROJECT_QUERY
+    sources = list(SUPPORTED_SOURCES)
+    cell_types: list[str] = []
     organism = "Homo sapiens"
     since_year = None
-    require_annotation = False
+    require_annotation = _prompt_yes_no("Require annotation evidence?", default_yes=True)
     min_annotation_confidence = 0.0
     annotation_methods: list[str] = []
-    require_fine_tcell = True
-    manual_lab_only = True
-
-    search_literature = _prompt_yes_no(
-        "Search dataset-linked literature?",
-        default_yes=bool(preset["search_literature"]),
-    )
-    literature_global = _prompt_yes_no(
-        "Also show recent query-based PubMed papers?",
-        default_yes=bool(preset["literature_global"]),
-    )
-    show_annotation_details = _prompt_yes_no("Show annotation details table?", default_yes=True)
-    preview = _prompt_int("How many rows to show in the console?", default=20, allow_empty=False) or 20
-    out = _prompt_text("Output file", default=DEFAULT_EASY_RESULTS).strip() or DEFAULT_EASY_RESULTS
+    require_fine_tcell = False
+    manual_lab_only = bool(require_annotation)
+    require_tcell_pure = False
+    search_literature = True
+    literature_global = False
+    show_annotation_details = True
+    preview = 20
+    out = DEFAULT_EASY_RESULTS
 
     args = argparse.Namespace(
         query=query,
-        max_results=100,
+        max_results=300,
         source=sources,
         organism=organism,
         since_year=since_year,
@@ -534,12 +511,13 @@ def _build_search_args_for_easy() -> argparse.Namespace:
         cell_mode="any",
         must_contain=[],
         exclude=[],
-        min_score=0.45,
+        min_score=0.0,
         require_annotation=require_annotation,
         min_annotation_confidence=min_annotation_confidence,
         annotation_method=annotation_methods,
         require_fine_tcell=require_fine_tcell,
         manual_lab_only=manual_lab_only,
+        require_tcell_pure=require_tcell_pure,
         email=None,
         api_key=None,
         no_scrna_clause=False,
@@ -552,9 +530,7 @@ def _build_search_args_for_easy() -> argparse.Namespace:
         out=out,
         preview=preview,
     )
-    _print_easy_summary(args=args, preset_label=str(preset["label"]))
-    if not _prompt_yes_no("Start search now?", default_yes=True):
-        raise KeyboardInterrupt
+    _print_easy_summary(args=args, preset_label="Fixed PBMC Project Profile")
     return args
 
 
@@ -600,10 +576,10 @@ def _run_easy_followup(args: argparse.Namespace) -> int:
 def run_easy(args: argparse.Namespace | None = None) -> int:
     try:
         search_args = _build_search_args_for_easy()
-        code = run_search(search_args)
-        if code != 0:
-            return code
-        return _run_easy_followup(search_args)
+        return run_search(search_args)
+    except RuntimeError as e:
+        print(f"ERROR: {e}")
+        return 2
     except (EOFError, KeyboardInterrupt):
         print("")
         print("Cancelled.")
@@ -613,6 +589,7 @@ def run_easy(args: argparse.Namespace | None = None) -> int:
 def run_search(args: argparse.Namespace) -> int:
     args.cell_type = _normalize_cell_type_filters(args.cell_type or [])
     args.manual_lab_only = bool(getattr(args, "manual_lab_only", False))
+    args.require_tcell_pure = bool(getattr(args, "require_tcell_pure", False))
     args.organism, organism_yes_no_guard = _sanitize_organism_filter(args.organism)
     if organism_yes_no_guard:
         print("Warning: organism filter looked like yes/no and was ignored.")
@@ -643,6 +620,7 @@ def run_search(args: argparse.Namespace) -> int:
         annotation_methods=args.annotation_method,
         require_fine_tcell=args.require_fine_tcell,
         manual_lab_only=args.manual_lab_only,
+        require_tcell_pure=args.require_tcell_pure,
     )
 
     _print_search_overview(
@@ -773,7 +751,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="cmd", required=False)
 
-    easy = sub.add_parser("easy", help="Interactive wizard: step-by-step prompts for your search.")
+    easy = sub.add_parser("easy", help="Run the fixed project PBMC search profile immediately.")
     easy.set_defaults(func=run_easy)
 
     search = sub.add_parser("search", help="Search GEO/SRA/CELLxGENE datasets and filter results.")
@@ -829,6 +807,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--require-fine-tcell",
         action="store_true",
         help="Require signals of fine-grained T-cell annotation (naive/memory/Treg/exhausted/etc.).",
+    )
+    search.add_argument(
+        "--require-tcell-pure",
+        action="store_true",
+        help="Require strict hints of likely ~100% T-cell content (sorted/purified/enriched T-cell wording).",
     )
     search.add_argument("--email", default=None, help="Optional email for NCBI requests.")
     search.add_argument("--api-key", default=None, help="NCBI API key (or set NCBI_API_KEY env var).")

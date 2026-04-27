@@ -70,9 +70,9 @@ scrna-finder search \
   --out results.csv
 ```
 
-## Easy Mode (Wizard)
+## Easy Mode (One Question)
 
-Start without long commands. The tool asks you what you want:
+Start without long commands. The tool starts the fixed project search directly:
 
 ```bash
 cd /Users/jannes/Github/helpers/scrna-finder
@@ -85,20 +85,19 @@ or explicitly:
 PYTHONPATH=src python3 -m scrna_finder.cli easy
 ```
 
-The wizard asks for:
-- preset mode (`PBMC Quick Start`, `PBMC + Fine T-cell (Strict)`, `Custom Search`)
-- query text
-- source databases (`geo`, `sra`, `cellxgene`, also by numbers `1,2,3`)
-- cell types (or `all` for no cell-type filter)
-- summary + confirmation before run
-- optional file manifest + optional direct download
+The easy mode asks one question:
+- require annotation evidence? (default: `yes`)
 
-The wizard now applies these defaults automatically (no extra prompts):
+Then it applies these defaults automatically:
+- query is fixed to `pbmc`
+- sources are fixed to `geo,sra,cellxgene`
 - organism is fixed to `Homo sapiens`
+- all cell types are allowed (no cell-type filter)
 - no year filter
 - no annotation-confidence prompt
-- fine T-cell subtype requirement is always enabled
-- manual/lab annotation mode is always enabled and software-annotated datasets are excluded
+- scRNA score threshold is disabled (`min-score = 0.0`)
+- fine T-cell subtype requirement is disabled
+- if annotation is enabled, manual/lab annotation mode is enabled and software-annotated datasets are excluded
 
 ## PBMC + Fine T-Cell Focus
 
@@ -174,6 +173,7 @@ Runs built-in benchmark cases for:
 - `--require-annotation`: keep only datasets with annotation evidence
 - `--annotation-method`: require a method hit (e.g. `seurat`, `singler`, `celltypist`, `azimuth`, `scanvi`, `lab`, `manual`)
 - `--require-fine-tcell`: require fine-grained T-cell subtype signals (`naive`, `memory`, `Treg`, `exhausted`, etc.)
+- `--require-tcell-pure`: strict text-hint filter for likely ~100% T-cell datasets (`sorted/purified/enriched T-cell` wording)
 - `--min-annotation-confidence`: confidence threshold for inferred annotation quality
 - `--show-annotation-details`: print methods/evidence/signal source (`title`, `summary`, `paper_title`)
 - `--search-literature`: enrich each dataset with linked PubMed metadata
