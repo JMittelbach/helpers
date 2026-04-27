@@ -42,7 +42,7 @@ def fmt_duration(seconds):
     return f"{minutes}m"
 
 
-def bar(percent, width=30):
+def quota_bar(percent, width=30):
     if percent is None:
         return "[" + "?" * width + "]"
 
@@ -51,7 +51,7 @@ def bar(percent, width=30):
     return "[" + "█" * filled + "░" * (width - filled) + "]"
 
 
-def token_bar(value, max_value, width=30):
+def day_bar(value, max_value, width=30):
     if max_value <= 0:
         filled = 0
     else:
@@ -171,7 +171,7 @@ def fetch_codex_quota(model):
         "Accept": "text/event-stream",
         "OpenAI-Beta": "responses=experimental",
         "originator": "codex_cli_rs",
-        "User-Agent": "simple-codex-quota/1.1",
+        "User-Agent": "simple-codex-quota/1.2",
         "session_id": os.urandom(16).hex(),
     }
 
@@ -389,55 +389,29 @@ def local_token_stats(days=7):
     }
 
 
-def estimate_left(local_used, used_percent):
-    if used_percent is None:
-        return None, None
-
-    if used_percent <= 0:
-        return None, None
-
-    estimated_total = local_used / (used_percent / 100.0)
-    estimated_left = max(0.0, estimated_total - local_used)
-
-    return estimated_total, estimated_left
-
-
-def print_quota(label, used_percent, reset_seconds, local_used):
+def print_quota(label, used_percent, reset_seconds):
     if used_percent is None:
         print(f"{label:<9} no quota data")
         return
 
     left_percent = max(0.0, 100.0 - used_percent)
-    estimated_total, estimated_left = estimate_left(local_used, used_percent)
 
     print(
-        f"{label:<9} {bar(used_percent)}  "
-        f"{used_percent:5.1f}% used  |  {left_percent:5.1f}% left  |  reset {fmt_duration(reset_seconds)}"
+        f"{label:<9} {quota_bar(used_percent)}  "
+        f"{used_percent:5.1f}% used  |  {left_percent:5.1f}% left  |  reset in {fmt_duration(reset_seconds)}"
     )
-
-    print(f"{'':<9} used tokens: {fmt_int(local_used)}")
-
-    if estimated_left is not None:
-        print(
-            f"{'':<9} estimated left: {fmt_int(estimated_left)} "
-            f"/ estimated total: {fmt_int(estimated_total)}"
-        )
-    else:
-        print(f"{'':<9} estimated left: not available yet")
 
 
 def print_token_summary(stats):
-    max_value = max(stats["all_time"], stats["today"], stats["last_5h"], stats["last_7d"], 1)
+    last_7d = stats["last_7d"]
 
-    rows = [
-        ("Total local", stats["all_time"]),
-        ("Today", stats["today"]),
-        ("Last 5h", stats["last_5h"]),
-        ("Last 7d", stats["last_7d"]),
-    ]
+    today_share = (stats["today"] / last_7d * 100.0) if last_7d > 0 else 0.0
+    last_5h_share = (stats["last_5h"] / last_7d * 100.0) if last_7d > 0 else 0.0
 
-    for label, value in rows:
-        print(f"{label:<12} {token_bar(value, max_value)}  {fmt_int(value)}")
+    print(f"Today              {fmt_int(stats['today'])} tokens  ({today_share:.1f}% of local 7d usage)")
+    print(f"Last 5h            {fmt_int(stats['last_5h'])} tokens  ({last_5h_share:.1f}% of local 7d usage)")
+    print(f"Last 7d            {fmt_int(stats['last_7d'])} tokens")
+    print(f"All local logged   {fmt_int(stats['all_time'])} tokens")
 
 
 def print_daily_chart(daily):
@@ -450,7 +424,7 @@ def print_daily_chart(daily):
     for date_key, tokens in daily.items():
         print(
             f"{date_key.strftime('%a')} {date_key.strftime('%Y-%m-%d')}  "
-            f"{token_bar(tokens, max_value)}  {fmt_int(tokens)}"
+            f"{day_bar(tokens, max_value)}  {fmt_int(tokens)}"
         )
 
 
@@ -463,7 +437,7 @@ def main():
     args = parser.parse_args()
 
     model = resolve_model(args.model)
-    status, headers, error_body = fetch_codex_quota(model)
+    _status, headers, error_body = fetch_codex_quota(model)
 
     primary_used = as_float(get_header(headers, "x-codex-primary-used-percent"))
     primary_reset = as_int(get_header(headers, "x-codex-primary-reset-after-seconds"))
@@ -476,16 +450,13 @@ def main():
     print()
     print("Codex quota")
     print("=" * 86)
-    print_quota("5h", primary_used, primary_reset, stats["last_5h"])
-    print()
-    print_quota("7d", secondary_used, secondary_reset, stats["last_7d"])
+    print_quota("5h", primary_used, primary_reset)
+    print_quota("7d", secondary_used, secondary_reset)
 
     print()
     print("Local tokens used")
     print("=" * 86)
     print_token_summary(stats)
-    print()
-    print(f"Log events   {fmt_int(stats['events'])} token events in {stats['files']} jsonl files")
 
     print_daily_chart(stats["daily"])
 
