@@ -1,8 +1,9 @@
 import unittest
 from unittest.mock import patch
 
-from scrna_finder.geo import _extract_pubmed_ids, enrich_records_with_pubmed
+from scrna_finder.literature import enrich_records_with_pubmed
 from scrna_finder.models import DatasetRecord
+from scrna_finder.ncbi import extract_pubmed_ids
 
 
 class LiteratureTests(unittest.TestCase):
@@ -12,7 +13,7 @@ class LiteratureTests(unittest.TestCase):
             "pmid": "PMID: 99887766",
             "other": "ignore",
         }
-        ids = _extract_pubmed_ids(item)
+        ids = extract_pubmed_ids(item)
         self.assertEqual(ids, ["12345678", "34567890", "99887766"])
 
     def test_enrich_records_with_latest_paper(self) -> None:
@@ -35,7 +36,7 @@ class LiteratureTests(unittest.TestCase):
             "111": {"title": "Old paper", "pubdate": "2018 Jan", "year": 2018},
             "222": {"title": "New paper", "pubdate": "2024 Dec", "year": 2024},
         }
-        with patch("scrna_finder.geo.fetch_pubmed_summaries", return_value=fake_meta):
+        with patch("scrna_finder.literature.fetch_pubmed_summaries", return_value=fake_meta):
             enrich_records_with_pubmed([record], papers_per_dataset=5)
 
         self.assertEqual(record.paper_count, 2)

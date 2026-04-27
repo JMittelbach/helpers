@@ -39,6 +39,12 @@ def write_records(path: str, records: Iterable[DatasetRecord]) -> None:
         "latest_paper_year",
         "latest_paper_title",
         "cell_type_hits",
+        "annotation_methods",
+        "annotation_evidence",
+        "annotation_tcell_detail",
+        "annotation_signal_sources",
+        "annotation_confidence",
+        "annotation_quality_tier",
     ]
     with p.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)

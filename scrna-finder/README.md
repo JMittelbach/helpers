@@ -1,6 +1,6 @@
 # scRNA Finder
 
-CLI tool to search, filter, and download scRNA-seq datasets from public repositories, with robust cell-type filtering and optional linked-paper enrichment.
+CLI tool to search, filter, and download scRNA-seq datasets from public repositories, with robust cell-type filtering and optional literature enrichment.
 
 ## Install
 
@@ -9,31 +9,63 @@ cd /Users/jannes/Github/helpers/scrna-finder
 python3 -m pip install -e . --no-build-isolation
 ```
 
-## 1) Search + Filter (including Cell Types)
+If your Python setup blocks global installs (PEP668), run directly without install:
+
+```bash
+cd /Users/jannes/Github/helpers/scrna-finder
+PYTHONPATH=src python3 -m scrna_finder.cli --help
+```
+
+## Quickstart
 
 ```bash
 scrna-finder search \
   --query "lung adenocarcinoma" \
+  --source geo \
+  --source sra \
+  --source cellxgene \
   --organism "Homo sapiens" \
   --since-year 2019 \
-  --cell-type "T-cell" \
+  --cell-type "CD8+ T" \
   --cell-type "fibroblast" \
   --cell-mode any \
   --must-contain "tumor" \
   --exclude "microarray" \
   --min-score 0.55 \
+  --literature-global \
   --search-literature \
   --papers-per-dataset 5 \
+  --literature-top 8 \
   --out results.csv
 ```
 
-The search output now includes:
-- databases currently queried
-- whether linked literature lookup is active
-- active filters
-- a readable table with score, sample count, linked-paper stats, and matched cell-type hits
+## PBMC + Fine T-Cell Focus
 
-## 2) Resolve Supplementary Files
+```bash
+scrna-finder search \
+  --query "pbmc immune atlas" \
+  --source cellxgene \
+  --organism "Homo sapiens" \
+  --cell-type "T-cell" \
+  --require-annotation \
+  --annotation-method seurat \
+  --annotation-method singler \
+  --require-fine-tcell \
+  --min-annotation-confidence 0.55 \
+  --show-annotation-details \
+  --preview 30 \
+  --out pbmc_ranked.csv
+```
+
+Console output includes:
+- selected data sources
+- hit distribution per source
+- active filter settings
+- table with score, sample count, paper stats, and matched cell-type aliases
+- optional extra table with recent query-based PubMed papers
+- warning section when one selected source is temporarily unavailable
+
+## Resolve Download Files (GEO + CELLxGENE)
 
 ```bash
 scrna-finder list-files \
@@ -53,15 +85,44 @@ scrna-finder download \
   --max-files 20
 ```
 
-## What Is Searched
+## Internal Evaluation
 
-- GEO Series metadata via NCBI E-utilities (`db=gds`)
-- GEO FTP supplementary file listings for file discovery
-- Optional: linked PubMed metadata for each GEO dataset (`--search-literature`)
+```bash
+scrna-finder evaluate --score-threshold 0.5
+```
+
+Runs built-in benchmark cases for:
+- scRNA relevance scoring quality
+- cell-type alias matching edge cases
+
+## What Databases Are Searched
+
+- `GEO` series metadata via NCBI E-utilities (`db=gds`)
+- `SRA` study metadata via NCBI E-utilities (`db=sra`)
+- `CELLxGENE Discover` dataset index via CZI Data Portal API (`/dp/v1/datasets/index` or `/v1/datasets/index`)
+- `CELLxGENE Discover` per-dataset asset endpoints for download links
+- `PubMed` dataset-linked paper metadata (`--search-literature`)
+- `PubMed` query-based recent paper search (`--literature-global`)
+- GEO FTP supplementary listings are used for GEO file discovery (`list-files`)
+
+## Main Search Options
+
+- `--source geo --source sra --source cellxgene`: choose one or multiple dataset sources (default: all)
+- `--cell-type ...`: repeatable, alias-aware cell-type filter (`T-cell`, `tcell`, `CD8+ T`, etc.)
+- `--cell-mode any|all`: combine repeated cell types
+- `--require-annotation`: keep only datasets with annotation evidence
+- `--annotation-method`: require a method hit (e.g. `seurat`, `singler`, `celltypist`, `azimuth`, `scanvi`)
+- `--require-fine-tcell`: require fine-grained T-cell subtype signals (`naive`, `memory`, `Treg`, `exhausted`, etc.)
+- `--min-annotation-confidence`: confidence threshold for inferred annotation quality
+- `--show-annotation-details`: print methods/evidence/signal source (`title`, `summary`, `paper_title`)
+- `--search-literature`: enrich each dataset with linked PubMed metadata
+- `--literature-global`: additionally show recent PubMed papers for the search query
+- `--show-cell-catalog`: print the known canonical cell-type labels
 
 ## Notes
 
-- Current dataset search source is GEO Series (`GSE`).
 - Relevance score is keyword-based to rank likely scRNA/snrna datasets.
 - Cell-type filter handles many label variants (e.g. `T-cell`, `tcell`, `CD8+ T`, `t lymphocyte`).
+- Annotation signals are inferred heuristically from metadata and (if available) linked paper titles.
+- For strict method provenance, inspect the linked paper methods section or supplementary metadata.
 - For higher throughput at NCBI, set `NCBI_API_KEY`.

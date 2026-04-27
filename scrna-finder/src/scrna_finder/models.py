@@ -5,6 +5,19 @@ from typing import Any
 
 
 @dataclass
+class PaperRecord:
+    pmid: str
+    title: str
+    pubdate: str
+    journal: str
+    year: int | None
+    url: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class DatasetRecord:
     source: str
     accession: str
@@ -22,6 +35,12 @@ class DatasetRecord:
     latest_paper_year: int | None = None
     latest_paper_title: str = ""
     cell_type_hits: str = ""
+    annotation_methods: str = ""
+    annotation_evidence: str = ""
+    annotation_tcell_detail: str = ""
+    annotation_signal_sources: str = ""
+    annotation_confidence: float = 0.0
+    annotation_quality_tier: str = "low"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -64,6 +83,12 @@ class DatasetRecord:
             except (TypeError, ValueError):
                 latest_paper_year = None
 
+        raw_annotation_confidence = value.get("annotation_confidence", 0.0)
+        try:
+            annotation_confidence = float(raw_annotation_confidence)
+        except (TypeError, ValueError):
+            annotation_confidence = 0.0
+
         return cls(
             source=str(value.get("source", "GEO")),
             accession=str(value.get("accession", "")),
@@ -81,4 +106,10 @@ class DatasetRecord:
             latest_paper_year=latest_paper_year,
             latest_paper_title=str(value.get("latest_paper_title", "")),
             cell_type_hits=str(value.get("cell_type_hits", "")),
+            annotation_methods=str(value.get("annotation_methods", "")),
+            annotation_evidence=str(value.get("annotation_evidence", "")),
+            annotation_tcell_detail=str(value.get("annotation_tcell_detail", "")),
+            annotation_signal_sources=str(value.get("annotation_signal_sources", "")),
+            annotation_confidence=annotation_confidence,
+            annotation_quality_tier=str(value.get("annotation_quality_tier", "low")),
         )

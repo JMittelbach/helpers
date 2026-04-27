@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import urlparse
 
-import requests
+from .http_client import HttpClientError, stream_download_to_file
 
 
 def _pick_file_name(url: str) -> str:
@@ -62,12 +62,10 @@ def download_from_manifest(
             print(f"[dry-run] {url} -> {output}")
             downloaded += 1
         else:
-            with requests.get(url, stream=True, timeout=timeout) as r:
-                r.raise_for_status()
-                with output.open("wb") as f:
-                    for chunk in r.iter_content(chunk_size=1024 * 1024):
-                        if chunk:
-                            f.write(chunk)
+            try:
+                stream_download_to_file(url=url, output=output, timeout=timeout)
+            except HttpClientError as e:
+                raise RuntimeError(str(e)) from e
             print(f"[ok] {output}")
             downloaded += 1
 

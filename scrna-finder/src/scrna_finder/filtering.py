@@ -24,6 +24,10 @@ def _contains_any(text: str, tokens: list[str]) -> bool:
     return any(t.lower() in lowered for t in tokens)
 
 
+def _split_tokens(field: str) -> list[str]:
+    return [t.strip().lower() for t in field.split(";") if t.strip()]
+
+
 def filter_records(
     records: Iterable[DatasetRecord],
     organism: str | None = None,
@@ -33,10 +37,15 @@ def filter_records(
     min_score: float = 0.0,
     cell_types: list[str] | None = None,
     cell_mode: str = "any",
+    require_annotation: bool = False,
+    min_annotation_confidence: float = 0.0,
+    annotation_methods: list[str] | None = None,
+    require_fine_tcell: bool = False,
 ) -> list[DatasetRecord]:
     must_contain = must_contain or []
     exclude = exclude or []
     cell_types = cell_types or []
+    annotation_methods = annotation_methods or []
     out: list[DatasetRecord] = []
 
     for r in records:
@@ -59,6 +68,17 @@ def filter_records(
         if exclude and _contains_any(text_blob, exclude):
             continue
         if r.relevance_score < min_score:
+            continue
+        if require_annotation and r.annotation_confidence < max(0.3, min_annotation_confidence):
+            continue
+        if r.annotation_confidence < min_annotation_confidence:
+            continue
+        if annotation_methods:
+            methods = set(_split_tokens(r.annotation_methods))
+            requested = {m.strip().lower() for m in annotation_methods if m.strip()}
+            if not methods.intersection(requested):
+                continue
+        if require_fine_tcell and not r.annotation_tcell_detail:
             continue
 
         out.append(r)
