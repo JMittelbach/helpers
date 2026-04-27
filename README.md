@@ -1,2 +1,6 @@
 # helpers
-personal_helper_scripts
+Personal helper scripts.
+
+## Included
+
+- `codex/`: Codex usage helper (`codex_usage.py`) mit optionalem `tokens`-Alias-Setup.
