@@ -33,6 +33,8 @@ class DatasetRecord:
     paper_ids: str = ""
     paper_count: int | None = None
     latest_paper_year: int | None = None
+    latest_paper_pmid: str = ""
+    latest_paper_url: str = ""
     latest_paper_title: str = ""
     cell_type_hits: str = ""
     annotation_methods: str = ""
@@ -104,6 +106,8 @@ class DatasetRecord:
             paper_ids=str(value.get("paper_ids", "")),
             paper_count=paper_count,
             latest_paper_year=latest_paper_year,
+            latest_paper_pmid=str(value.get("latest_paper_pmid", "")),
+            latest_paper_url=str(value.get("latest_paper_url", "")),
             latest_paper_title=str(value.get("latest_paper_title", "")),
             cell_type_hits=str(value.get("cell_type_hits", "")),
             annotation_methods=str(value.get("annotation_methods", "")),

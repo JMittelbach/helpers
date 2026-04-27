@@ -13,6 +13,14 @@ ANNOTATION_METHOD_KEYWORDS: dict[str, list[str]] = {
     "scanvi": ["scanvi", "sc anvi", "scvi", "scvi-tools"],
     "scmap": ["scmap"],
     "garnett": ["garnett"],
+    "cellassign": ["cellassign"],
+    "sctype": ["sctype", "sc type"],
+    "scpred": ["scpred", "single cell prediction"],
+    "clustifyr": ["clustifyr"],
+    "scnym": ["scnym"],
+    "ingest": ["scanpy ingest", "ingest"],
+    "harmony": ["harmony integration", "harmony"],
+    "cell_ontology": ["cell ontology", "cl ontology"],
     "marker_based": ["marker gene", "canonical marker", "marker-based", "manual annotation"],
 }
 
@@ -23,6 +31,14 @@ ANNOTATION_QUALITY_KEYWORDS = [
     "validated",
     "consensus annotation",
     "reference atlas",
+    "flow cytometry",
+    "facs",
+    "manual gating",
+    "expert review",
+    "double checked",
+    "cross validation",
+    "benchmark",
+    "ground truth",
 ]
 
 FINE_TCELL_KEYWORDS = [

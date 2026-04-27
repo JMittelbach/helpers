@@ -39,6 +39,30 @@ scrna-finder search \
   --out results.csv
 ```
 
+## Easy Mode (Wizard)
+
+Start without long commands. The tool asks you what you want:
+
+```bash
+cd /Users/jannes/Github/helpers/scrna-finder
+PYTHONPATH=src python3 -m scrna_finder.cli
+```
+
+or explicitly:
+
+```bash
+PYTHONPATH=src python3 -m scrna_finder.cli easy
+```
+
+The wizard asks for:
+- preset mode (`PBMC Schnellstart`, `PBMC + feine T-Zellen`, `Freie Suche`)
+- query text
+- source databases (`geo`, `sra`, `cellxgene`, also by numbers `1,2,3`)
+- organism, year, cell types
+- annotation constraints (`seurat`, `singler`, etc.)
+- summary + confirmation before run
+- optional file manifest + optional direct download
+
 ## PBMC + Fine T-Cell Focus
 
 ```bash
@@ -61,7 +85,7 @@ Console output includes:
 - selected data sources
 - hit distribution per source
 - active filter settings
-- table with score, sample count, paper stats, and matched cell-type aliases
+- table with score, sample count, paper stats, PMID hint (if available), and matched cell-type aliases
 - optional extra table with recent query-based PubMed papers
 - warning section when one selected source is temporarily unavailable
 
@@ -122,7 +146,8 @@ Runs built-in benchmark cases for:
 ## Notes
 
 - Relevance score is keyword-based to rank likely scRNA/snrna datasets.
-- Cell-type filter handles many label variants (e.g. `T-cell`, `tcell`, `CD8+ T`, `t lymphocyte`).
+- Cell-type filter is not limited to T-cells. It supports many groups (`B-cell`, `NK`, `monocyte`, `dendritic`, `platelet`, `megakaryocyte`, `erythrocyte`, `fibroblast`, `epithelial`, `endothelial`, etc.) with typo-tolerant matching for common misspellings.
 - Annotation signals are inferred heuristically from metadata and (if available) linked paper titles.
+- If linked PubMed IDs are available, the output includes a PMID/URL hint per dataset.
 - For strict method provenance, inspect the linked paper methods section or supplementary metadata.
 - For higher throughput at NCBI, set `NCBI_API_KEY`.

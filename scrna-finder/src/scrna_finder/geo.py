@@ -58,6 +58,7 @@ def esummary_records(ids: list[str], user_query: str = "", email: str | None = N
         pubdate = str(item.get("PDAT") or item.get("pdat") or "")
         n_samples = to_int(item.get("n_samples"))
         pmids = extract_pubmed_ids(item)
+        first_pmid = pmids[0] if pmids else ""
 
         score = score_scrna_relevance(title, summary, user_query=user_query)
         geo_url = f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={accession}"
@@ -78,6 +79,8 @@ def esummary_records(ids: list[str], user_query: str = "", email: str | None = N
                 user_query=user_query,
                 paper_ids=",".join(pmids),
                 paper_count=len(pmids),
+                latest_paper_pmid=first_pmid,
+                latest_paper_url=f"https://pubmed.ncbi.nlm.nih.gov/{first_pmid}/" if first_pmid else "",
             )
         )
 

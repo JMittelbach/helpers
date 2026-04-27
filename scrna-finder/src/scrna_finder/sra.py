@@ -71,6 +71,7 @@ def search_sra_projects(
         pubdate = _pick(item, ["createdate", "updatedate", "pubdate"])
         n_samples = _parse_n_samples(item, summary=summary)
         pmids = extract_pubmed_ids(item)
+        first_pmid = pmids[0] if pmids else ""
 
         score = score_scrna_relevance(title=title, summary=summary, user_query=user_query)
         url = f"https://www.ncbi.nlm.nih.gov/sra/?term={accession}"
@@ -89,6 +90,8 @@ def search_sra_projects(
                 user_query=user_query,
                 paper_ids=",".join(pmids),
                 paper_count=len(pmids),
+                latest_paper_pmid=first_pmid,
+                latest_paper_url=f"https://pubmed.ncbi.nlm.nih.gov/{first_pmid}/" if first_pmid else "",
             )
         )
     return records

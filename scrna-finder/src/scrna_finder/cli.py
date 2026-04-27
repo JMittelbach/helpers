@@ -5,7 +5,7 @@ import os
 from collections import Counter
 from pathlib import Path
 
-from .celltypes import canonical_cell_type_names
+from .celltypes import canonical_cell_type_names, canonical_to_display_name
 from .cellxgene import fetch_cellxgene_dataset_assets
 from .downloader import download_from_manifest
 from .evaluation import run_benchmark
@@ -14,6 +14,10 @@ from .geo import fetch_supplementary_files
 from .io_utils import read_manifest, read_records, write_manifest, write_records
 from .literature import search_recent_pubmed
 from .search_engine import SUPPORTED_SOURCES, normalize_sources, search_datasets_report
+
+
+DEFAULT_EASY_RESULTS = "search_results.csv"
+DEFAULT_EASY_MANIFEST = "files_manifest.csv"
 
 
 def _shorten(text: str, width: int) -> str:
@@ -37,6 +41,20 @@ def _paper_preview(record: object) -> str:
     if latest_year is None:
         return str(paper_count)
     return f"{paper_count}@{latest_year}"
+
+
+def _paper_link_preview(record: object) -> str:
+    pmid = str(getattr(record, "latest_paper_pmid", "") or "").strip()
+    if pmid:
+        return pmid
+    url = str(getattr(record, "latest_paper_url", "") or "").strip()
+    if not url:
+        return "-"
+    if "pubmed.ncbi.nlm.nih.gov/" in url:
+        maybe = url.rstrip("/").split("/")[-1]
+        if maybe.isdigit():
+            return maybe
+    return _shorten(url, 18)
 
 
 def _annotation_preview(record: object) -> str:
@@ -95,7 +113,7 @@ def _print_results(records: list, limit: int = 20) -> None:
     shown = records[:limit]
     header = (
         f"{'#':>3}  {'Src':<9} {'Accession':<11} {'Score':>6} {'Anno':<22} {'Samples':>7} "
-        f"{'Papers':>10} {'T-detail':<16} {'Cell Hits':<18} {'Organism':<16} Title"
+        f"{'Papers':>10} {'PMID':<10} {'T-detail':<16} {'Cell Hits':<18} {'Organism':<16} Title"
     )
     print(header)
     print("-" * len(header))
@@ -106,10 +124,11 @@ def _print_results(records: list, limit: int = 20) -> None:
         organism = _shorten(r.organism or "-", 16)
         title = _shorten(r.title, 54)
         source = _shorten(r.source or "-", 9)
+        pmid = _shorten(_paper_link_preview(r), 10)
         print(
             f"{idx:>3}  {source:<9} {r.accession:<11} {r.relevance_score:>6.3f} "
             f"{anno:<22} {_format_int(r.n_samples):>7} {_paper_preview(r):>10} "
-            f"{t_detail:<16} {cell_hits:<18} {organism:<16} {title}"
+            f"{pmid:<10} {t_detail:<16} {cell_hits:<18} {organism:<16} {title}"
         )
 
 
@@ -123,15 +142,22 @@ def _print_annotation_details(records: list, limit: int = 20) -> None:
     shown = candidates[:limit]
     print("")
     print("=== Annotation Details ===")
-    header = f"{'#':>3}  {'Accession':<11} {'Methods':<20} {'Signal Src':<18} {'Evidence':<36} {'T-detail':<20}"
+    header = (
+        f"{'#':>3}  {'Accession':<11} {'Methods':<20} {'Signal Src':<18} "
+        f"{'Evidence':<30} {'PMID':<10} {'T-detail':<20}"
+    )
     print(header)
     print("-" * len(header))
     for idx, r in enumerate(shown, start=1):
         methods = _shorten(r.annotation_methods or "-", 20)
         signal_src = _shorten(r.annotation_signal_sources or "-", 18)
-        evidence = _shorten(r.annotation_evidence or "-", 36)
+        evidence = _shorten(r.annotation_evidence or "-", 30)
+        pmid = _shorten(_paper_link_preview(r), 10)
         t_detail = _shorten(r.annotation_tcell_detail or "-", 20)
-        print(f"{idx:>3}  {r.accession:<11} {methods:<20} {signal_src:<18} {evidence:<36} {t_detail:<20}")
+        print(
+            f"{idx:>3}  {r.accession:<11} {methods:<20} {signal_src:<18} "
+            f"{evidence:<30} {pmid:<10} {t_detail:<20}"
+        )
 
 
 def _print_recent_papers(papers: list, limit: int) -> None:
@@ -167,6 +193,337 @@ def _print_benchmark(results: dict[str, object]) -> None:
             f"{'ok' if row['scrna_ok'] else 'fail':>7} "
             f"{'ok' if row['cell_ok'] else 'fail':>6} {row['cell_hits']}"
         )
+
+
+def _print_section(title: str) -> None:
+    print("")
+    print(title)
+    print("-" * len(title))
+
+
+def _prompt_text(prompt: str, default: str | None = None) -> str:
+    suffix = f" [{default}]" if default not in (None, "") else ""
+    value = input(f"{prompt}{suffix}: ").strip()
+    if not value and default is not None:
+        return default
+    return value
+
+
+def _prompt_yes_no(prompt: str, default_yes: bool = False) -> bool:
+    default = "j" if default_yes else "n"
+    while True:
+        raw = _prompt_text(f"{prompt} (j/n)", default=default).strip().lower()
+        if raw in {"j", "ja", "y", "yes"}:
+            return True
+        if raw in {"n", "nein", "no"}:
+            return False
+        print("Bitte 'j' oder 'n' eingeben.")
+
+
+def _prompt_choice(prompt: str, options: list[tuple[str, str]], default_key: str) -> str:
+    labels = ", ".join(f"{key}={label}" for key, label in options)
+    while True:
+        raw = _prompt_text(f"{prompt} ({labels})", default=default_key).strip().lower()
+        for key, _label in options:
+            if raw == key.lower():
+                return key
+        print("Bitte eine gueltige Option auswaehlen.")
+
+
+def _parse_csv_tokens(text: str) -> list[str]:
+    if not text.strip():
+        return []
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _parse_sources_input(text: str) -> list[str]:
+    lowered = text.strip().lower()
+    if not lowered or lowered in {"all", "alle", "*", "1,2,3"}:
+        return list(SUPPORTED_SOURCES)
+
+    aliases = {
+        "geo": "geo",
+        "g": "geo",
+        "1": "geo",
+        "sra": "sra",
+        "s": "sra",
+        "2": "sra",
+        "cellxgene": "cellxgene",
+        "cxg": "cellxgene",
+        "cell": "cellxgene",
+        "c": "cellxgene",
+        "3": "cellxgene",
+    }
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in _parse_csv_tokens(lowered):
+        mapped = aliases.get(token)
+        if not mapped:
+            continue
+        if mapped not in seen:
+            out.append(mapped)
+            seen.add(mapped)
+    return out or list(SUPPORTED_SOURCES)
+
+
+def _prompt_int(prompt: str, default: int, allow_empty: bool = True) -> int | None:
+    while True:
+        raw = _prompt_text(prompt, default=str(default) if default is not None else None).strip()
+        if not raw and allow_empty:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            print("Bitte eine ganze Zahl eingeben.")
+
+
+def _prompt_year(prompt: str, default: str = "") -> int | None:
+    while True:
+        raw = _prompt_text(prompt, default=default).strip()
+        if not raw:
+            return None
+        try:
+            year = int(raw)
+        except ValueError:
+            print("Bitte ein Jahr als Zahl eingeben, z.B. 2021.")
+            continue
+        if year < 1990 or year > 2100:
+            print("Bitte ein sinnvolles Jahr zwischen 1990 und 2100 eingeben.")
+            continue
+        return year
+
+
+def _prompt_float_01(prompt: str, default: float) -> float:
+    while True:
+        raw = _prompt_text(prompt, default=str(default)).strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            print("Bitte eine Zahl zwischen 0 und 1 eingeben.")
+            continue
+        if value < 0.0 or value > 1.0:
+            print("Bitte eine Zahl zwischen 0 und 1 eingeben.")
+            continue
+        return value
+
+
+def _easy_preset_defaults(key: str) -> dict[str, object]:
+    if key == "1":
+        return {
+            "label": "PBMC Schnellstart",
+            "query": "pbmc immune atlas",
+            "sources": ["geo", "sra", "cellxgene"],
+            "organism": "Homo sapiens",
+            "since_year": 2019,
+            "cell_types": ["T-cell"],
+            "require_annotation": False,
+            "min_annotation_confidence": 0.0,
+            "annotation_methods": [],
+            "require_fine_tcell": False,
+            "search_literature": True,
+            "literature_global": False,
+        }
+    if key == "2":
+        return {
+            "label": "PBMC + feine T-Zellen (streng)",
+            "query": "pbmc t cell atlas",
+            "sources": ["cellxgene", "geo", "sra"],
+            "organism": "Homo sapiens",
+            "since_year": 2020,
+            "cell_types": ["T-cell", "CD4 T", "CD8 T"],
+            "require_annotation": True,
+            "min_annotation_confidence": 0.55,
+            "annotation_methods": ["seurat", "singler"],
+            "require_fine_tcell": True,
+            "search_literature": True,
+            "literature_global": True,
+        }
+    return {
+        "label": "Freie Suche",
+        "query": "",
+        "sources": ["geo", "sra", "cellxgene"],
+        "organism": "Homo sapiens",
+        "since_year": None,
+        "cell_types": [],
+        "require_annotation": True,
+        "min_annotation_confidence": 0.45,
+        "annotation_methods": [],
+        "require_fine_tcell": False,
+        "search_literature": True,
+        "literature_global": False,
+    }
+
+
+def _print_easy_summary(args: argparse.Namespace, preset_label: str) -> None:
+    _print_section("Zusammenfassung")
+    print(f"Preset: {preset_label}")
+    print(f"Query: {args.query}")
+    print(f"Datenbanken: {', '.join(str(x).upper() for x in args.source)}")
+    print(f"Organismus: {args.organism or '-'}")
+    print(f"Jahr >= : {args.since_year if args.since_year is not None else '-'}")
+    print(f"Zelltypen: {', '.join(args.cell_type) if args.cell_type else '-'}")
+    print(f"Nur Annotation: {'ja' if args.require_annotation else 'nein'}")
+    print(f"Min Annotation-Confidence: {args.min_annotation_confidence:.2f}")
+    print(f"Methoden: {', '.join(args.annotation_method) if args.annotation_method else '-'}")
+    print(f"Feine T-Zellen: {'ja' if args.require_fine_tcell else 'nein'}")
+    print(f"Datensatz-Literatur: {'ja' if args.search_literature else 'nein'}")
+    print(f"Globale Literatur: {'ja' if args.literature_global else 'nein'}")
+    print(f"Vorschau-Zeilen: {args.preview}")
+    print(f"Ausgabe-Datei: {args.out}")
+
+
+def _build_search_args_for_easy() -> argparse.Namespace:
+    _print_section("Interaktiver Suchmodus")
+    print("Beantworte nur die Fragen. Der Rest wird automatisch gesetzt.")
+    print("Du kannst jederzeit mit Ctrl+C abbrechen.")
+
+    preset_key = _prompt_choice(
+        "Waehle einen Startmodus",
+        options=[("1", "PBMC Schnellstart"), ("2", "PBMC + feine T-Zellen (streng)"), ("3", "Freie Suche")],
+        default_key="1",
+    )
+    preset = _easy_preset_defaults(preset_key)
+
+    query_default = str(preset["query"])
+    query = _prompt_text("Was willst du suchen? (z.B. pbmc immune atlas)", default=query_default).strip()
+    while not query:
+        print("Die Suche braucht einen Text.")
+        query = _prompt_text("Was willst du suchen?", default=query_default).strip()
+
+    source_default = ",".join(str(x) for x in preset["sources"])
+    source_text = _prompt_text(
+        "Welche Datenbanken? (all oder 1,2,3 oder geo,sra,cellxgene)",
+        default=source_default,
+    )
+    sources = _parse_sources_input(source_text)
+
+    organism = _prompt_text("Organismus", default=str(preset["organism"])).strip() or None
+    since_year = _prompt_year("Ab welchem Jahr? (leer = kein Filter)", default=str(preset["since_year"] or ""))
+    cell_types = _parse_csv_tokens(
+        _prompt_text(
+            "Zelltypen (kommagetrennt, z.B. T-cell,CD8+ T)",
+            default=",".join(str(x) for x in preset["cell_types"]),
+        )
+    )
+
+    require_annotation = _prompt_yes_no(
+        "Nur annotierte Datensaetze?",
+        default_yes=bool(preset["require_annotation"]),
+    )
+    min_annotation_confidence = 0.0
+    annotation_methods: list[str] = []
+    require_fine_tcell = False
+    if require_annotation:
+        min_annotation_confidence = _prompt_float_01(
+            "Min Annotation-Confidence (0-1)",
+            default=float(preset["min_annotation_confidence"]),
+        )
+        annotation_methods = _parse_csv_tokens(
+            _prompt_text(
+                "Methoden optional (z.B. seurat,singler,celltypist)",
+                default=",".join(str(x) for x in preset["annotation_methods"]),
+            )
+        )
+        require_fine_tcell = _prompt_yes_no(
+            "Feine T-Zell Subtypen verlangen?",
+            default_yes=bool(preset["require_fine_tcell"]),
+        )
+
+    search_literature = _prompt_yes_no(
+        "Datensatz-verknuepfte Literatur suchen?",
+        default_yes=bool(preset["search_literature"]),
+    )
+    literature_global = _prompt_yes_no(
+        "Zusatz: aktuelle query-basierte PubMed-Literatur zeigen?",
+        default_yes=bool(preset["literature_global"]),
+    )
+    show_annotation_details = _prompt_yes_no("Detailtabelle fuer Annotation anzeigen?", default_yes=True)
+    preview = _prompt_int("Wie viele Treffer in der Konsole anzeigen?", default=20, allow_empty=False) or 20
+    out = _prompt_text("Ergebnisdatei", default=DEFAULT_EASY_RESULTS).strip() or DEFAULT_EASY_RESULTS
+
+    args = argparse.Namespace(
+        query=query,
+        max_results=100,
+        source=sources,
+        organism=organism,
+        since_year=since_year,
+        cell_type=cell_types,
+        cell_mode="any",
+        must_contain=[],
+        exclude=[],
+        min_score=0.45,
+        require_annotation=require_annotation,
+        min_annotation_confidence=min_annotation_confidence,
+        annotation_method=annotation_methods,
+        require_fine_tcell=require_fine_tcell,
+        email=None,
+        api_key=None,
+        no_scrna_clause=False,
+        search_literature=search_literature,
+        papers_per_dataset=5,
+        literature_global=literature_global,
+        literature_top=5,
+        show_cell_catalog=False,
+        show_annotation_details=show_annotation_details,
+        out=out,
+        preview=preview,
+    )
+    _print_easy_summary(args=args, preset_label=str(preset["label"]))
+    if not _prompt_yes_no("Suche jetzt starten?", default_yes=True):
+        raise KeyboardInterrupt
+    return args
+
+
+def _run_easy_followup(args: argparse.Namespace) -> int:
+    if not args.out:
+        return 0
+    _print_section("Naechste Schritte")
+    if not _prompt_yes_no("Dateien fuer gefundene Datensaetze jetzt aufloesen?", default_yes=False):
+        return 0
+
+    manifest_out = _prompt_text("Manifest-Datei", default=DEFAULT_EASY_MANIFEST).strip() or DEFAULT_EASY_MANIFEST
+    include_tokens = _parse_csv_tokens(_prompt_text("Datei-Filter include (z.B. .h5ad,.mtx)", default=".h5ad"))
+    list_args = argparse.Namespace(
+        input=args.out,
+        out=manifest_out,
+        max_datasets=20,
+        include=include_tokens,
+        exclude=[],
+    )
+    run_list_files(list_args)
+
+    if not _prompt_yes_no("Manifest-Dateien jetzt herunterladen?", default_yes=False):
+        return 0
+
+    dest = _prompt_text("Zielordner fuer Downloads", default="./downloads").strip() or "./downloads"
+    max_files_raw = _prompt_text("Maximale Dateien (0 = alle)", default="20").strip()
+    try:
+        max_files = int(max_files_raw)
+    except ValueError:
+        max_files = 20
+    dl_args = argparse.Namespace(
+        manifest=manifest_out,
+        dest=dest,
+        include=[],
+        exclude=[],
+        max_files=max_files,
+        dry_run=False,
+    )
+    run_download(dl_args)
+    return 0
+
+
+def run_easy(args: argparse.Namespace | None = None) -> int:
+    try:
+        search_args = _build_search_args_for_easy()
+        code = run_search(search_args)
+        if code != 0:
+            return code
+        return _run_easy_followup(search_args)
+    except (EOFError, KeyboardInterrupt):
+        print("")
+        print("Abgebrochen.")
+        return 130
 
 
 def run_search(args: argparse.Namespace) -> int:
@@ -231,7 +588,7 @@ def run_search(args: argparse.Namespace) -> int:
     if args.show_cell_catalog:
         print("")
         print("Known cell-type canonical labels:")
-        print(", ".join(canonical_cell_type_names()))
+        print(", ".join(canonical_to_display_name(x) for x in canonical_cell_type_names()))
     return 0
 
 
@@ -322,7 +679,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog="scrna-finder",
         description="Search, filter, and download scRNA-seq datasets from GEO, SRA, and CELLxGENE.",
     )
-    sub = p.add_subparsers(dest="cmd", required=True)
+    sub = p.add_subparsers(dest="cmd", required=False)
+
+    easy = sub.add_parser("easy", help="Interaktiver Wizard: fragt Schritt fuer Schritt nach Suchwuenschen.")
+    easy.set_defaults(func=run_easy)
 
     search = sub.add_parser("search", help="Search GEO/SRA/CELLxGENE datasets and filter results.")
     search.add_argument("--query", required=True, help="Text query, e.g. 'lung cancer'.")
@@ -444,6 +804,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    if not hasattr(args, "func"):
+        # No command provided -> interactive user-friendly mode.
+        return run_easy()
     try:
         return args.func(args)
     except RuntimeError as e:

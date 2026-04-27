@@ -48,6 +48,7 @@ def enrich_records_with_pubmed(
         if papers_per_dataset > 0:
             pmids = pmids[:papers_per_dataset]
         best_year: int | None = None
+        best_pmid = ""
         best_title = ""
 
         for pmid in pmids:
@@ -56,13 +57,20 @@ def enrich_records_with_pubmed(
                 continue
             year = entry.get("year")
             title = str(entry.get("title", ""))
+            if not best_pmid:
+                best_pmid = pmid
+                best_title = title
             if isinstance(year, int) and (best_year is None or year > best_year):
                 best_year = year
+                best_pmid = pmid
                 best_title = title
 
         r.paper_count = len(pmids)
-        r.latest_paper_year = best_year
-        r.latest_paper_title = best_title
+        if best_pmid:
+            r.latest_paper_year = best_year
+            r.latest_paper_pmid = best_pmid
+            r.latest_paper_url = f"https://pubmed.ncbi.nlm.nih.gov/{best_pmid}/"
+            r.latest_paper_title = best_title
 
 
 def build_pubmed_query(user_query: str, scrna_only: bool = True) -> str:

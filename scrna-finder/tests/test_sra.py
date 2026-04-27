@@ -34,6 +34,8 @@ class SraTests(unittest.TestCase):
         self.assertEqual(rec.accession, "SRP123456")
         self.assertEqual(rec.n_samples, 120)
         self.assertEqual(rec.paper_ids, "12345678")
+        self.assertEqual(rec.latest_paper_pmid, "12345678")
+        self.assertEqual(rec.latest_paper_url, "https://pubmed.ncbi.nlm.nih.gov/12345678/")
         self.assertIn("ncbi.nlm.nih.gov/sra", rec.geo_url)
 
 

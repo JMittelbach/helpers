@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import re
 
 # Canonical cell-type labels with common variants as seen in public metadata.
@@ -20,6 +21,19 @@ CELL_TYPE_ALIASES: dict[str, list[str]] = {
         "cd8 positive t",
         "helper t",
         "cytotoxic t",
+        "regulatory t",
+        "treg",
+        "th1",
+        "th2",
+        "th17",
+        "tfh",
+        "mait",
+        "gamma delta t",
+        "gd t",
+        "naive t",
+        "memory t",
+        "effector t",
+        "activated t",
     ],
     "b_cell": [
         "b cell",
@@ -33,6 +47,8 @@ CELL_TYPE_ALIASES: dict[str, list[str]] = {
         "cd19 positive b",
         "cd20 b",
         "cd20 positive b",
+        "memory b",
+        "naive b",
     ],
     "nk_cell": [
         "nk cell",
@@ -40,6 +56,8 @@ CELL_TYPE_ALIASES: dict[str, list[str]] = {
         "natural killer",
         "natural killer cell",
         "nkt",
+        "ilc",
+        "innate lymphoid cell",
     ],
     "monocyte": [
         "monocyte",
@@ -48,12 +66,15 @@ CELL_TYPE_ALIASES: dict[str, list[str]] = {
         "non classical monocyte",
         "cd14 monocyte",
         "cd16 monocyte",
+        "intermediate monocyte",
     ],
     "macrophage": [
         "macrophage",
         "macrophages",
         "tumor associated macrophage",
         "tam",
+        "m1 macrophage",
+        "m2 macrophage",
     ],
     "dendritic_cell": [
         "dendritic cell",
@@ -62,6 +83,9 @@ CELL_TYPE_ALIASES: dict[str, list[str]] = {
         "cd1c dendritic",
         "plasmacytoid dendritic",
         "pdc",
+        "conventional dendritic",
+        "cdc1",
+        "cdc2",
     ],
     "neutrophil": ["neutrophil", "neutrophils"],
     "eosinophil": ["eosinophil", "eosinophils"],
@@ -79,6 +103,12 @@ CELL_TYPE_ALIASES: dict[str, list[str]] = {
     "astrocyte": ["astrocyte", "astrocytes"],
     "oligodendrocyte": ["oligodendrocyte", "oligodendrocytes", "oligo"],
     "hepatocyte": ["hepatocyte", "hepatocytes"],
+    "cholangiocyte": ["cholangiocyte", "cholangiocytes", "bile duct cell"],
+    "erythrocyte": ["erythrocyte", "erythrocytes", "red blood cell", "rbc"],
+    "platelet": ["platelet", "platelets", "thrombocyte", "thrombocytes"],
+    "megakaryocyte": ["megakaryocyte", "megakaryocytes", "mk", "megakaryocytic"],
+    "immune_cell": ["immune cell", "immune cells", "leukocyte", "white blood cell"],
+    "myeloid_cell": ["myeloid cell", "myeloid cells", "myeloid lineage"],
 }
 
 
@@ -110,6 +140,26 @@ for canonical, aliases in CELL_TYPE_ALIASES.items():
         _TERM_TO_CANONICAL[alias] = canonical
 
 
+def _guess_canonical_from_typo(normalized_term: str) -> str | None:
+    """Conservative typo recovery for user-entered cell-type terms."""
+    if len(normalized_term) < 4:
+        return None
+
+    if normalized_term in _TERM_TO_CANONICAL:
+        return _TERM_TO_CANONICAL[normalized_term]
+
+    compact = normalized_term.replace(" ", "")
+    for alias, canonical in _TERM_TO_CANONICAL.items():
+        alias_compact = alias.replace(" ", "")
+        if compact == alias_compact:
+            return canonical
+
+    candidates = difflib.get_close_matches(normalized_term, _TERM_TO_CANONICAL.keys(), n=1, cutoff=0.85)
+    if not candidates:
+        return None
+    return _TERM_TO_CANONICAL.get(candidates[0])
+
+
 def _contains_phrase(normalized_text: str, normalized_phrase: str) -> bool:
     if not normalized_phrase:
         return False
@@ -137,7 +187,11 @@ def resolve_requested_cell_types(terms: list[str]) -> tuple[set[str], list[str]]
         if canonical:
             canonical_targets.add(canonical)
         else:
-            free_text_targets.append(normalized)
+            guessed = _guess_canonical_from_typo(normalized)
+            if guessed:
+                canonical_targets.add(guessed)
+            else:
+                free_text_targets.append(normalized)
 
     return canonical_targets, free_text_targets
 

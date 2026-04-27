@@ -37,6 +37,8 @@ def write_records(path: str, records: Iterable[DatasetRecord]) -> None:
         "paper_ids",
         "paper_count",
         "latest_paper_year",
+        "latest_paper_pmid",
+        "latest_paper_url",
         "latest_paper_title",
         "cell_type_hits",
         "annotation_methods",

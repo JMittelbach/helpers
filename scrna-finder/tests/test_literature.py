@@ -41,6 +41,8 @@ class LiteratureTests(unittest.TestCase):
 
         self.assertEqual(record.paper_count, 2)
         self.assertEqual(record.latest_paper_year, 2024)
+        self.assertEqual(record.latest_paper_pmid, "222")
+        self.assertEqual(record.latest_paper_url, "https://pubmed.ncbi.nlm.nih.gov/222/")
         self.assertEqual(record.latest_paper_title, "New paper")
 
 

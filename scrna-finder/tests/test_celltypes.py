@@ -59,6 +59,18 @@ class CellTypeTests(unittest.TestCase):
         self.assertEqual(out[0].accession, "GSE1")
         self.assertIn("t cell", out[0].cell_type_hits)
 
+    def test_non_tcell_type_matches_platelet(self) -> None:
+        text = "PBMC cohort with platelets and megakaryocytes."
+        matched, hits = match_cell_types(text, ["platelet"], mode="any")
+        self.assertTrue(matched)
+        self.assertIn("platelet", hits)
+
+    def test_typo_is_resolved_for_common_cell_type(self) -> None:
+        text = "Single-cell profile with monocytes and dendritic cells."
+        matched, hits = match_cell_types(text, ["monoycte"], mode="any")
+        self.assertTrue(matched)
+        self.assertIn("monocyte", hits)
+
 
 if __name__ == "__main__":
     unittest.main()
