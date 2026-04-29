@@ -46,6 +46,12 @@ else
   fi
 fi
 
+if command -v cloudflared >/dev/null 2>&1; then
+  pass "cloudflared gefunden: $(cloudflared --version | head -n 1)"
+else
+  warn "cloudflared fehlt. Fuer Zugriff von jedem Netz: brew install cloudflared"
+fi
+
 section "Projektstatus"
 if [ -f "package.json" ]; then
   pass "package.json vorhanden"

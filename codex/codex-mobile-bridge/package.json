@@ -11,7 +11,8 @@
     "doctor": "bash ./scripts/check-prereqs.sh",
     "urls": "bash ./scripts/show-local-urls.sh",
     "codex:find": "bash ./scripts/find-codex-bin.sh",
-    "codex:fix-path": "bash ./scripts/fix-codex-path.sh"
+    "codex:fix-path": "bash ./scripts/fix-codex-path.sh",
+    "tunnel:cf": "bash ./scripts/start-cloudflare-tunnel.sh"
   },
   "keywords": [
     "codex",

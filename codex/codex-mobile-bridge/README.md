@@ -112,6 +112,31 @@ Kurze Diagnose:
 npm run doctor
 ```
 
+## Zugriff von jedem Netz (empfohlen: HTTPS Tunnel)
+
+Wenn lokales WLAN zickt oder du von unterwegs aufrufen willst:
+
+1. Installiere `cloudflared`:
+
+```bash
+brew install cloudflared
+```
+
+2. Starte die Bridge:
+
+```bash
+npm start
+```
+
+3. In einem zweiten Terminal starte den Tunnel:
+
+```bash
+npm run tunnel:cf
+```
+
+Dann erscheint eine URL wie `https://random-subdomain.trycloudflare.com`.
+Diese URL kannst du vom Handy aus in jedem Netz oeffnen (solange dein Mac online ist und beide Prozesse laufen).
+
 ## Sicherheit
 
 - Setze `APP_TOKEN`, bevor du vom Handy aus dem Heimnetz raus zugreifst.
