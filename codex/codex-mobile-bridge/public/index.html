@@ -18,9 +18,9 @@
     <div class="ambient"></div>
     <main class="app">
       <header class="top">
-        <p class="eyebrow">Remote Codex</p>
+        <p class="eyebrow">Remote Control</p>
         <h1>Codex Mobile Bridge</h1>
-        <p class="subline">Run and monitor Codex from your phone.</p>
+        <p class="subline">Dark mobile cockpit for Codex + VS Code + session mirror.</p>
         <div class="status-row">
           <span id="connectionDot" class="dot offline"></span>
           <span id="connectionText">Disconnected</span>
@@ -43,8 +43,18 @@
           <button id="createChatBtn" class="btn secondary">New</button>
         </div>
         <div class="row">
-          <button id="refreshMirrorBtn" class="btn ghost" type="button">Refresh VS Code Mirror</button>
+          <input id="chatSearchInput" type="text" placeholder="Search chats..." />
         </div>
+        <div class="row">
+          <select id="chatSourceFilter">
+            <option value="all">All Sources</option>
+            <option value="web">Web App</option>
+            <option value="vscode">VS Code Mirror</option>
+            <option value="codex">Codex Session Mirror</option>
+          </select>
+          <button id="refreshMirrorBtn" class="btn ghost" type="button">Refresh Mirror</button>
+        </div>
+        <p id="chatStats" class="meta-line">0 chats</p>
         <div id="chatList" class="chat-list"></div>
       </section>
 
@@ -58,7 +68,7 @@
           Source:
           <strong id="selectedChatSource">-</strong>
         </p>
-        <p id="readOnlyHint" class="meta-line hidden">This chat is mirrored from VS Code and is read-only here.</p>
+        <p id="readOnlyHint" class="meta-line hidden">This chat is mirrored and read-only in this web app.</p>
 
         <label for="cwdInput">Workspace</label>
         <input id="cwdInput" type="text" placeholder="/Users/jannes/Github" />
@@ -83,6 +93,21 @@
       <section class="card">
         <h2>Conversation</h2>
         <div id="messagesPanel" class="messages"></div>
+      </section>
+
+      <section class="card">
+        <h2>Files</h2>
+        <div class="row">
+          <select id="fileRootSelect"></select>
+        </div>
+        <div class="row">
+          <button id="fileUpBtn" class="btn secondary" type="button">Up</button>
+          <button id="fileRefreshBtn" class="btn secondary" type="button">Refresh</button>
+        </div>
+        <p id="filePathDisplay" class="path-line">-</p>
+        <div id="fileList" class="file-list"></div>
+        <h3>Preview</h3>
+        <pre id="filePreview" class="log"></pre>
       </section>
 
       <section class="card">

@@ -6,6 +6,9 @@ const authBtn = document.getElementById("authBtn");
 const chatTitleInput = document.getElementById("chatTitleInput");
 const createChatBtn = document.getElementById("createChatBtn");
 const refreshMirrorBtn = document.getElementById("refreshMirrorBtn");
+const chatSearchInput = document.getElementById("chatSearchInput");
+const chatSourceFilter = document.getElementById("chatSourceFilter");
+const chatStats = document.getElementById("chatStats");
 const chatList = document.getElementById("chatList");
 const selectedChatName = document.getElementById("selectedChatName");
 const selectedChatSource = document.getElementById("selectedChatSource");
@@ -19,6 +22,12 @@ const messagesPanel = document.getElementById("messagesPanel");
 const logPanel = document.getElementById("logPanel");
 const finalPanel = document.getElementById("finalPanel");
 const presetsWrap = document.getElementById("presets");
+const fileRootSelect = document.getElementById("fileRootSelect");
+const fileUpBtn = document.getElementById("fileUpBtn");
+const fileRefreshBtn = document.getElementById("fileRefreshBtn");
+const filePathDisplay = document.getElementById("filePathDisplay");
+const fileList = document.getElementById("fileList");
+const filePreview = document.getElementById("filePreview");
 
 const presets = [
   {
@@ -49,6 +58,11 @@ let selectedChatId = null;
 const chats = new Map();
 const details = new Map();
 const streamCache = new Map();
+const fileState = {
+  roots: [],
+  currentPath: "",
+  parentPath: ""
+};
 
 function statusLabel(status) {
   if (status === "running") {
@@ -67,7 +81,23 @@ function sourceLabel(chat) {
   if (chat.source === "vscode-mirror") {
     return "VS Code mirror (read-only)";
   }
+  if (chat.source === "codex-session-mirror") {
+    return "Codex session mirror (read-only)";
+  }
   return "Web app (runnable)";
+}
+
+function sourceKey(chat) {
+  if (!chat) {
+    return "web";
+  }
+  if (chat.source === "vscode-mirror") {
+    return "vscode";
+  }
+  if (chat.source === "codex-session-mirror") {
+    return "codex";
+  }
+  return "web";
 }
 
 function setStatus(text, online) {
@@ -122,7 +152,7 @@ function clip(text, size) {
   return `${text.slice(0, size)}...`;
 }
 
-function toChatArray() {
+function toChatArrayUnfiltered() {
   return Array.from(chats.values()).sort((a, b) => {
     const aa = a.updatedAt || "";
     const bb = b.updatedAt || "";
@@ -136,20 +166,53 @@ function toChatArray() {
   });
 }
 
+function toChatArray() {
+  const search = (chatSearchInput.value || "").trim().toLowerCase();
+  const filter = chatSourceFilter.value || "all";
+
+  return toChatArrayUnfiltered().filter((chat) => {
+    const key = sourceKey(chat);
+    if (filter !== "all" && key !== filter) {
+      return false;
+    }
+
+    if (!search) {
+      return true;
+    }
+    const hay = `${chat.title || ""}\n${chat.lastUserMessage || ""}\n${chat.lastAssistantMessage || ""}`.toLowerCase();
+    return hay.includes(search);
+  });
+}
+
+function renderChatStats() {
+  const all = toChatArrayUnfiltered();
+  const visible = toChatArray();
+  const running = all.filter((c) => c.status === "running").length;
+  chatStats.textContent = `${visible.length}/${all.length} chats shown • ${running} running`;
+}
+
 function setActionState() {
   const chat = getChatSummary(selectedChatId);
+  const hasSelection = Boolean(chat);
   const isRunning = chat && chat.status === "running";
   const isReadOnly = Boolean(chat && chat.readOnly);
-  runBtn.disabled = !authed || !selectedChatId || Boolean(isRunning) || isReadOnly;
-  cancelBtn.disabled = !authed || !selectedChatId || !isRunning || isReadOnly;
+  const disableRunControls = !authed || !hasSelection || Boolean(isRunning) || isReadOnly;
+  runBtn.disabled = disableRunControls;
+  cancelBtn.disabled = !authed || !hasSelection || !isRunning || isReadOnly;
   createChatBtn.disabled = !authed;
   refreshMirrorBtn.disabled = !authed;
+  fileRootSelect.disabled = !authed || fileState.roots.length === 0;
+  fileUpBtn.disabled = !authed;
+  fileRefreshBtn.disabled = !authed;
 
-  cwdInput.disabled = isReadOnly;
-  modeSelect.disabled = isReadOnly;
-  promptInput.disabled = isReadOnly;
-  if (isReadOnly) {
-    promptInput.placeholder = "Mirrored VS Code chat (read-only)";
+  const disableInputFields = !hasSelection || isReadOnly;
+  cwdInput.disabled = disableInputFields;
+  modeSelect.disabled = disableInputFields;
+  promptInput.disabled = disableInputFields;
+  if (!hasSelection) {
+    promptInput.placeholder = "Select a chat first...";
+  } else if (isReadOnly) {
+    promptInput.placeholder = "Mirrored chat (read-only)";
   } else {
     promptInput.placeholder = "Ask Codex what to do...";
   }
@@ -192,10 +255,11 @@ function renderChatList() {
   chatList.innerHTML = "";
 
   const sorted = toChatArray();
+  renderChatStats();
   if (sorted.length === 0) {
     const empty = document.createElement("p");
     empty.className = "chat-empty";
-    empty.textContent = "No chats yet.";
+    empty.textContent = "No chats match this filter.";
     chatList.appendChild(empty);
     return;
   }
@@ -217,8 +281,9 @@ function renderChatList() {
     badge.textContent = statusLabel(chat.status);
 
     const source = document.createElement("span");
-    source.className = "chat-source";
-    source.textContent = chat.source === "vscode-mirror" ? "vscode" : "web";
+    const srcKey = sourceKey(chat);
+    source.className = `chat-source source-${srcKey}`;
+    source.textContent = srcKey;
 
     const preview = document.createElement("p");
     preview.className = "chat-preview";
@@ -323,6 +388,74 @@ function renderFinal() {
   }
 
   finalPanel.textContent = lastAssistant;
+}
+
+function setFileRoots(roots) {
+  fileState.roots = Array.isArray(roots) ? roots.slice() : [];
+  fileRootSelect.innerHTML = "";
+
+  if (fileState.roots.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No roots";
+    fileRootSelect.appendChild(opt);
+    fileRootSelect.disabled = true;
+    return;
+  }
+
+  fileRootSelect.disabled = false;
+  fileState.roots.forEach((rootPath) => {
+    const opt = document.createElement("option");
+    opt.value = rootPath;
+    opt.textContent = rootPath;
+    fileRootSelect.appendChild(opt);
+  });
+}
+
+function requestFileList(targetPath) {
+  send({ type: "fs/list", path: targetPath || fileState.currentPath || fileRootSelect.value });
+}
+
+function requestFileRead(targetPath) {
+  send({ type: "fs/read", path: targetPath });
+}
+
+function renderFileEntries(entries) {
+  fileList.innerHTML = "";
+
+  if (!Array.isArray(entries) || entries.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "file-empty";
+    empty.textContent = "Empty directory.";
+    fileList.appendChild(empty);
+    return;
+  }
+
+  entries.forEach((entry) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "file-item";
+
+    const kind = document.createElement("span");
+    kind.className = "file-kind";
+    kind.textContent = entry.kind === "dir" ? "dir" : "file";
+
+    const label = document.createElement("span");
+    label.textContent = entry.name;
+
+    btn.appendChild(kind);
+    btn.appendChild(label);
+
+    btn.addEventListener("click", () => {
+      if (entry.kind === "dir") {
+        requestFileList(entry.path);
+      } else {
+        requestFileRead(entry.path);
+      }
+    });
+
+    fileList.appendChild(btn);
+  });
 }
 
 function selectChat(chatId, requestDetail) {
@@ -442,6 +575,11 @@ function handleServerMessage(data) {
     authed = !requiresToken;
     showTokenCard(requiresToken);
     setStatus(requiresToken ? "Connected (token required)" : "Connected", true);
+    setFileRoots(data.browseRoots || []);
+    if (authed && (data.browseRoots || []).length > 0) {
+      fileRootSelect.value = data.browseRoots[0];
+      requestFileList(data.browseRoots[0]);
+    }
     setActionState();
     return;
   }
@@ -450,6 +588,9 @@ function handleServerMessage(data) {
     authed = true;
     showTokenCard(false);
     setStatus("Authenticated", true);
+    if (fileRootSelect.value) {
+      requestFileList(fileRootSelect.value);
+    }
     setActionState();
     return;
   }
@@ -458,6 +599,7 @@ function handleServerMessage(data) {
     authed = false;
     showTokenCard(true);
     setStatus("Auth failed", true);
+    filePreview.textContent = "Authenticate to use file browser.";
     addLogLine(selectedChatId || "global", `Auth error: ${data.error || "unknown"}`);
     setActionState();
     return;
@@ -466,6 +608,41 @@ function handleServerMessage(data) {
   if (data.type === "server/error") {
     if (selectedChatId) {
       addLogLine(selectedChatId, `server error: ${data.error || "unknown"}`);
+    }
+    return;
+  }
+
+  if (data.type === "fs/error") {
+    filePreview.textContent = `File browser error: ${data.error || "unknown"}`;
+    return;
+  }
+
+  if (data.type === "fs/list") {
+    fileState.currentPath = data.path || "";
+    fileState.parentPath = data.parent || "";
+    filePathDisplay.textContent = data.path || "-";
+
+    if (fileState.roots.some((root) => fileState.currentPath === root || fileState.currentPath.startsWith(`${root}/`))) {
+      const matchedRoot = fileState.roots.find(
+        (root) => fileState.currentPath === root || fileState.currentPath.startsWith(`${root}/`)
+      );
+      if (matchedRoot) {
+        fileRootSelect.value = matchedRoot;
+      }
+    }
+
+    renderFileEntries(data.entries || []);
+    if (data.truncated) {
+      filePreview.textContent = `Directory too large, showing first entries only.\nPath: ${data.path}`;
+    }
+    return;
+  }
+
+  if (data.type === "fs/read") {
+    filePathDisplay.textContent = data.path || fileState.currentPath || "-";
+    filePreview.textContent = data.text || "";
+    if (data.truncated) {
+      filePreview.textContent += "\n\n[truncated preview]";
     }
     return;
   }
@@ -672,6 +849,7 @@ function connect() {
     authed = false;
     setStatus("Disconnected", false);
     showTokenCard(requiresToken);
+    filePreview.textContent = "Disconnected.";
     setActionState();
     setTimeout(connect, 2000);
   });
@@ -688,7 +866,7 @@ runBtn.addEventListener("click", () => {
 
   const selected = getChatSummary(selectedChatId);
   if (selected && selected.readOnly) {
-    addLogLine(selectedChatId, "this is a mirrored VS Code chat (read-only here)");
+    addLogLine(selectedChatId, "this mirrored chat is read-only in the web app");
     return;
   }
 
@@ -771,6 +949,35 @@ chatTitleInput.addEventListener("keydown", (evt) => {
     evt.preventDefault();
     createChatBtn.click();
   }
+});
+
+chatSearchInput.addEventListener("input", () => {
+  renderChatList();
+});
+
+chatSourceFilter.addEventListener("change", () => {
+  renderChatList();
+});
+
+fileRootSelect.addEventListener("change", () => {
+  if (!fileRootSelect.value) {
+    return;
+  }
+  requestFileList(fileRootSelect.value);
+});
+
+fileUpBtn.addEventListener("click", () => {
+  if (fileState.parentPath) {
+    requestFileList(fileState.parentPath);
+    return;
+  }
+  if (fileRootSelect.value) {
+    requestFileList(fileRootSelect.value);
+  }
+});
+
+fileRefreshBtn.addEventListener("click", () => {
+  requestFileList(fileState.currentPath || fileRootSelect.value);
 });
 
 presets.forEach((preset) => {
