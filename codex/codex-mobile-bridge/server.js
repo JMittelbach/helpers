@@ -176,6 +176,23 @@ function buildCodexArgs(prompt, cwd, mode) {
   return args;
 }
 
+function buildCodexResumeArgs(sessionId, prompt) {
+  return ["exec", "resume", "--json", sessionId, prompt];
+}
+
+function resolveExistingDir(targetPath, fallbackDir) {
+  const candidate = path.resolve(targetPath || fallbackDir || DEFAULT_CWD);
+  try {
+    const stat = fs.statSync(candidate);
+    if (stat.isDirectory()) {
+      return candidate;
+    }
+  } catch {
+    return path.resolve(fallbackDir || DEFAULT_CWD);
+  }
+  return path.resolve(fallbackDir || DEFAULT_CWD);
+}
+
 function isAssistantItemType(itemType) {
   return ["agent_message", "assistant_message", "agentMessage", "assistantMessage"].includes(itemType);
 }
@@ -288,6 +305,17 @@ function getRuntime(chatId) {
 
 function getAnyChat(chatId) {
   return chats.get(chatId) || mirroredChats.get(chatId) || null;
+}
+
+function canResumeCodexMirror(chat) {
+  return Boolean(
+    chat &&
+      chat.readOnly &&
+      chat.source === "codex-session-mirror" &&
+      chat.mirror &&
+      typeof chat.mirror.sessionId === "string" &&
+      chat.mirror.sessionId
+  );
 }
 
 function listChatsSorted() {
