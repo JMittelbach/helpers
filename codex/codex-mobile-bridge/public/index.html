@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codex Mobile Bridge</title>
+    <meta name="theme-color" content="#083d3f" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="ambient"></div>
+    <main class="app">
+      <header class="top">
+        <p class="eyebrow">Remote Codex</p>
+        <h1>Codex Mobile Bridge</h1>
+        <p class="subline">Steuere deinen Mac-Codex sauber vom Handy.</p>
+        <div class="status-row">
+          <span id="connectionDot" class="dot offline"></span>
+          <span id="connectionText">Nicht verbunden</span>
+        </div>
+      </header>
+
+      <section id="authCard" class="card hidden">
+        <h2>Token</h2>
+        <p>Server verlangt ein App-Token.</p>
+        <div class="row">
+          <input id="tokenInput" type="password" placeholder="APP_TOKEN" />
+          <button id="authBtn" class="btn secondary">Verbinden</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Run</h2>
+        <label for="cwdInput">Workspace</label>
+        <input id="cwdInput" type="text" placeholder="/Users/jannes/Github" />
+
+        <label for="modeSelect">Sandbox</label>
+        <select id="modeSelect">
+          <option value="read-only">read-only (sicher)</option>
+          <option value="workspace-write">workspace-write (Datei-Aenderungen erlaubt)</option>
+        </select>
+
+        <label for="promptInput">Prompt</label>
+        <textarea
+          id="promptInput"
+          rows="7"
+          placeholder="z.B. Analysiere mein Repo und gib mir einen Plan..."
+        ></textarea>
+
+        <div class="presets" id="presets"></div>
+
+        <div class="row actions">
+          <button id="runBtn" class="btn primary">Run</button>
+          <button id="cancelBtn" class="btn ghost" disabled>Stop</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Live</h2>
+        <pre id="logPanel" class="log"></pre>
+      </section>
+
+      <section class="card">
+        <h2>Antwort</h2>
+        <article id="finalPanel" class="final"></article>
+      </section>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

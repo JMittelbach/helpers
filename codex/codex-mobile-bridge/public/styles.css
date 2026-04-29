@@ -1,0 +1,252 @@
+:root {
+  --bg: #f4f8f5;
+  --ink: #132625;
+  --muted: #4f6765;
+  --card: rgba(255, 255, 255, 0.78);
+  --line: rgba(12, 46, 47, 0.17);
+  --primary: #0b5f63;
+  --primary-ink: #f7fffe;
+  --accent: #ef7f3b;
+  --danger: #a02e38;
+  --ok: #177257;
+  --code-bg: #0f1f23;
+  --code-ink: #ddf6f4;
+  --shadow: 0 18px 42px rgba(15, 44, 42, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  color: var(--ink);
+  background: var(--bg);
+  font-family: "Space Grotesk", "Trebuchet MS", sans-serif;
+}
+
+body {
+  position: relative;
+  overflow-x: hidden;
+}
+
+.ambient {
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(circle at 8% 6%, rgba(239, 127, 59, 0.24), transparent 32%),
+    radial-gradient(circle at 90% 15%, rgba(11, 95, 99, 0.22), transparent 37%),
+    linear-gradient(160deg, #f7fbf8 0%, #e5f1ee 52%, #f4f8f5 100%);
+  z-index: -1;
+}
+
+.app {
+  width: min(780px, 100% - 1.2rem);
+  margin: 0 auto;
+  padding: 1rem 0 2rem;
+}
+
+.top {
+  border: 1px solid var(--line);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.88), rgba(236, 245, 244, 0.7));
+  box-shadow: var(--shadow);
+  border-radius: 20px;
+  padding: 1rem;
+  animation: rise 440ms ease both;
+}
+
+.eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+h1 {
+  margin: 0.2rem 0 0.3rem;
+  font-size: clamp(1.3rem, 6.2vw, 2rem);
+  line-height: 1.08;
+}
+
+.subline {
+  margin: 0;
+  color: var(--muted);
+}
+
+.status-row {
+  margin-top: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+}
+
+.dot {
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 99px;
+  display: inline-block;
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.04);
+}
+
+.dot.online {
+  background: var(--ok);
+}
+
+.dot.offline {
+  background: var(--danger);
+}
+
+.card {
+  margin-top: 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 0.95rem;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(5px);
+  animation: rise 440ms ease both;
+}
+
+.hidden {
+  display: none;
+}
+
+h2 {
+  margin: 0 0 0.65rem;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+label {
+  display: block;
+  margin: 0.52rem 0 0.3rem;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+input,
+select,
+textarea,
+button {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  font: inherit;
+}
+
+input,
+select,
+textarea {
+  padding: 0.68rem 0.75rem;
+  background: rgba(255, 255, 255, 0.75);
+  color: var(--ink);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 130px;
+}
+
+.row {
+  display: flex;
+  gap: 0.55rem;
+}
+
+.actions {
+  margin-top: 0.72rem;
+}
+
+.btn {
+  cursor: pointer;
+  padding: 0.7rem 0.85rem;
+  border-width: 1px;
+  font-weight: 700;
+  transition: transform 140ms ease, filter 140ms ease;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.primary {
+  background: linear-gradient(130deg, #0d686c, #0b4f52);
+  color: var(--primary-ink);
+}
+
+.secondary {
+  background: #efefef;
+  color: #1a2d2c;
+}
+
+.ghost {
+  background: rgba(220, 80, 92, 0.08);
+  color: var(--danger);
+}
+
+.presets {
+  margin-top: 0.56rem;
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.preset {
+  border: 1px solid rgba(11, 95, 99, 0.28);
+  background: rgba(11, 95, 99, 0.08);
+  border-radius: 999px;
+  padding: 0.28rem 0.62rem;
+  font-size: 0.82rem;
+  color: #073e41;
+  cursor: pointer;
+}
+
+.log {
+  margin: 0;
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border-radius: 12px;
+  border: 1px solid rgba(146, 219, 206, 0.2);
+  padding: 0.72rem;
+  min-height: 220px;
+  max-height: 45vh;
+  overflow: auto;
+  font-family: "IBM Plex Mono", "Consolas", monospace;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.final {
+  min-height: 80px;
+  white-space: pre-wrap;
+  font-size: 0.95rem;
+  line-height: 1.43;
+  color: #1a2e2d;
+}
+
+@keyframes rise {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (min-width: 740px) {
+  .actions .btn {
+    max-width: 200px;
+  }
+}

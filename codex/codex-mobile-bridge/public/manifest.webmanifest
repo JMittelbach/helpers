@@ -1,0 +1,10 @@
+{
+  "name": "Codex Mobile Bridge",
+  "short_name": "CodexBridge",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f8f5",
+  "theme_color": "#083d3f",
+  "description": "Mobile Interface zum Steuern von Codex auf einem Remote-Mac.",
+  "icons": []
+}

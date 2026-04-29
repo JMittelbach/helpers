@@ -1,0 +1,30 @@
+{
+  "name": "codex-mobile-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mobile-first web interface to run Codex on a remote Mac workspace",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "check": "node --check server.js",
+    "doctor": "bash ./scripts/check-prereqs.sh",
+    "urls": "bash ./scripts/show-local-urls.sh",
+    "codex:find": "bash ./scripts/find-codex-bin.sh",
+    "codex:fix-path": "bash ./scripts/fix-codex-path.sh"
+  },
+  "keywords": [
+    "codex",
+    "mobile",
+    "remote",
+    "vscode"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "helmet": "^8.1.0",
+    "ws": "^8.18.1"
+  }
+}
