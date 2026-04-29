@@ -1,48 +1,49 @@
 # Codex Mobile Bridge
 
-Mobile-first Weboberflaeche, um `codex exec` auf deinem Mac auszufuehren und live am Handy zu verfolgen.
+Mobile-first web app to run Codex on your Mac from a phone browser.
 
-## Was ist drin
+## Features
 
-- Node.js Server mit WebSocket-Streaming
-- Mobile UI (Prompt, Sandbox-Mode, Live-Logs, Final Answer)
-- Optionales App-Token (`APP_TOKEN`)
-- Pfad-Sicherheitsgrenze ueber `ALLOWED_ROOTS`
+- Multi-chat workspace in the web app
+- Live run status for all web-app chats
+- Per-chat logs, messages, and latest answer
+- Optional token auth (`APP_TOKEN`)
+- Workspace safety guard via `ALLOWED_ROOTS`
+- Optional Cloudflare quick tunnel for remote access
 
-## Projektstruktur
+## Important Chat Scope
 
-- `server.js` - Backend, startet `codex exec --json`
-- `public/index.html` - UI
-- `public/app.js` - Clientlogik
-- `public/styles.css` - Mobile Styling
+This app shows chats that are created and run **inside this web app**.
 
-## Voraussetzungen
+It does **not** automatically import or mirror already-running chats from VS Code or other Codex clients.
 
-- macOS/Linux mit installiertem `codex`
-- Node.js 20+ und npm
+## Project Structure
 
-Hinweis: Auf deinem aktuellen System war beim Check **kein `node` installiert** (`command not found`).
+- `server.js`: backend, websocket API, chat store, Codex process runner
+- `public/index.html`: mobile UI
+- `public/app.js`: client state management and live updates
+- `public/styles.css`: styling
+- `scripts/`: helper scripts
 
-## Manuelle Befehle (dein Mac)
+## Prerequisites
 
-1. Node installieren (Homebrew):
+- macOS/Linux with `codex` available
+- Node.js 20+ and npm
+
+## Manual Setup (Mac)
 
 ```bash
 brew install node@24
 echo 'export PATH="/opt/homebrew/opt/node@24/bin:$PATH"' >> ~/.zprofile
 source ~/.zprofile
+
 node -v
 npm -v
-```
-
-2. Codex-Pfad pruefen:
-
-```bash
 which codex
 codex --version
 ```
 
-Falls `codex` nicht gefunden wird:
+If `codex` is not found:
 
 ```bash
 cd /Users/jannes/Github/helpers/codex/codex-mobile-bridge
@@ -52,105 +53,49 @@ source ~/.zprofile
 which codex
 ```
 
-Alternative ohne PATH-Aenderung in `.env`:
-
-```bash
-CODEX_BIN="$(bash ./scripts/find-codex-bin.sh)"
-echo "CODEX_BIN=$CODEX_BIN" >> .env
-```
-
-3. Projekt-Check:
+## Local Run
 
 ```bash
 cd /Users/jannes/Github/helpers/codex/codex-mobile-bridge
-bash ./scripts/check-prereqs.sh
-```
-
-## Setup
-
-1. In das Projekt wechseln:
-
-```bash
-cd /Users/jannes/Github/helpers/codex/codex-mobile-bridge
-```
-
-2. Abhaengigkeiten installieren:
-
-```bash
 npm install
-```
-
-3. Env-Datei anlegen:
-
-```bash
 cp .env.example .env
-```
-
-4. Optional `APP_TOKEN` in `.env` setzen.
-
-5. Server starten:
-
-```bash
 npm start
 ```
 
-6. Im gleichen WLAN auf dem Handy oeffnen:
-
-```text
-http://<MAC-IP>:4173
-```
-
-Lokale URLs ausgeben:
+In another terminal:
 
 ```bash
-bash ./scripts/show-local-urls.sh
+npm run urls
 ```
 
-Kurze Diagnose:
+Open the shown URL from your phone.
 
-```bash
-npm run doctor
-```
-
-## Zugriff von jedem Netz (empfohlen: HTTPS Tunnel)
-
-Wenn lokales WLAN zickt oder du von unterwegs aufrufen willst:
-
-1. Installiere `cloudflared`:
+## Any-Network Access (optional)
 
 ```bash
 brew install cloudflared
-```
-
-2. Starte die Bridge:
-
-```bash
+cd /Users/jannes/Github/helpers/codex/codex-mobile-bridge
 npm start
-```
-
-3. In einem zweiten Terminal starte den Tunnel:
-
-```bash
+# new terminal
 npm run tunnel:cf
 ```
 
-Dann erscheint eine URL wie `https://random-subdomain.trycloudflare.com`.
-Diese URL kannst du vom Handy aus in jedem Netz oeffnen (solange dein Mac online ist und beide Prozesse laufen).
+Use the `https://...trycloudflare.com` URL on your phone.
 
-## Sicherheit
+Note: Some corporate/filtered networks may block `trycloudflare` with TLS interception.
 
-- Setze `APP_TOKEN`, bevor du vom Handy aus dem Heimnetz raus zugreifst.
-- Lass `ALLOWED_ROOTS` eng (z. B. nur `/Users/jannes/Github`).
-- Fuer Internetzugriff besser via Tailscale/ZeroTier statt offenem Port-Forwarding.
+## Useful Commands
 
-## Aktueller MVP-Flow
+```bash
+npm run doctor
+npm run urls
+npm run codex:find
+npm run codex:fix-path
+npm run tunnel:cf
+```
 
-- Die UI startet pro Anfrage einen neuen `codex exec` Run.
-- `read-only`: nur Analyse
-- `workspace-write`: Datei-Aenderungen im erlaubten Root
+## Security Notes
 
-## Naechster Ausbau (optional)
-
-- Wechsel von `codex exec` auf `codex app-server` fuer echte, persistente Threads
-- Session-Historie in lokaler Datei speichern
-- PWA-Icons + Offline Shell
+- Set a strong `APP_TOKEN` in `.env`.
+- Keep `ALLOWED_ROOTS` narrow.
+- Do not expose an unauthenticated bridge to the public internet.

@@ -3,42 +3,59 @@ const connectionText = document.getElementById("connectionText");
 const authCard = document.getElementById("authCard");
 const tokenInput = document.getElementById("tokenInput");
 const authBtn = document.getElementById("authBtn");
+const chatTitleInput = document.getElementById("chatTitleInput");
+const createChatBtn = document.getElementById("createChatBtn");
+const chatList = document.getElementById("chatList");
+const selectedChatName = document.getElementById("selectedChatName");
 const cwdInput = document.getElementById("cwdInput");
 const modeSelect = document.getElementById("modeSelect");
 const promptInput = document.getElementById("promptInput");
 const runBtn = document.getElementById("runBtn");
 const cancelBtn = document.getElementById("cancelBtn");
+const messagesPanel = document.getElementById("messagesPanel");
 const logPanel = document.getElementById("logPanel");
 const finalPanel = document.getElementById("finalPanel");
 const presetsWrap = document.getElementById("presets");
 
 const presets = [
   {
-    label: "Repo-Check",
+    label: "Repo Audit",
     prompt:
-      "Analysiere dieses Repo und gib mir: 1) Architektur, 2) 3 Risiken, 3) konkrete naechste 5 Schritte."
+      "Analyze this repository and return: architecture summary, top 3 risks, and the next 5 concrete actions."
   },
   {
     label: "Fix Tests",
-    prompt: "Fuehre Tests aus, behebe Fehler und fasse alle Aenderungen zusammen."
+    prompt: "Run the test suite, fix failures, and summarize every change made."
   },
   {
-    label: "Review",
+    label: "Code Review",
     prompt:
-      "Mache ein Code-Review mit Fokus auf Bugs und Regressionen. Nenne Findings nach Schweregrad."
+      "Perform a code review focused on bugs and regressions. List findings by severity and file."
   },
   {
     label: "Plan",
-    prompt: "Erstelle einen Umsetzungsplan fuer dieses Feature mit Risiken und Aufwandsschaetzung."
+    prompt: "Create an implementation plan for this feature with risks and effort estimate."
   }
 ];
 
 let ws;
 let requiresToken = false;
 let authed = false;
-let running = false;
-let liveAnswer = "";
-let lastRunId = null;
+let selectedChatId = null;
+
+const chats = new Map();
+const details = new Map();
+const streamCache = new Map();
+
+function statusLabel(status) {
+  if (status === "running") {
+    return "running";
+  }
+  if (status === "failed") {
+    return "failed";
+  }
+  return "idle";
+}
 
 function setStatus(text, online) {
   connectionText.textContent = text;
@@ -46,165 +63,548 @@ function setStatus(text, online) {
   connectionDot.classList.toggle("offline", !online);
 }
 
-function log(line) {
-  const stamp = new Date().toLocaleTimeString();
-  logPanel.textContent += `[${stamp}] ${line}\n`;
-  logPanel.scrollTop = logPanel.scrollHeight;
-}
-
-function setRunState(active) {
-  running = active;
-  runBtn.disabled = active || !authed;
-  cancelBtn.disabled = !active;
-}
-
 function showTokenCard(show) {
   authCard.classList.toggle("hidden", !show);
 }
 
+function stamp() {
+  return new Date().toLocaleTimeString("en-US", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+}
+
 function send(msg) {
   if (!ws || ws.readyState !== 1) {
-    log("Keine aktive Verbindung zum Server.");
     return;
   }
   ws.send(JSON.stringify(msg));
 }
 
-function extractEventSummary(event) {
-  const eType = event.type || event.method || "unknown";
+function getChatSummary(chatId) {
+  return chatId ? chats.get(chatId) || null : null;
+}
 
-  if (eType === "item/agentMessage/delta") {
+function ensureChatDetail(chatId) {
+  if (!details.has(chatId)) {
+    details.set(chatId, {
+      id: chatId,
+      logs: [],
+      messages: [],
+      runs: []
+    });
+  }
+  return details.get(chatId);
+}
+
+function clip(text, size) {
+  if (!text) {
+    return "";
+  }
+  if (text.length <= size) {
+    return text;
+  }
+  return `${text.slice(0, size)}...`;
+}
+
+function toChatArray() {
+  return Array.from(chats.values()).sort((a, b) => {
+    const aa = a.updatedAt || "";
+    const bb = b.updatedAt || "";
+    if (aa < bb) {
+      return 1;
+    }
+    if (aa > bb) {
+      return -1;
+    }
+    return 0;
+  });
+}
+
+function setActionState() {
+  const chat = getChatSummary(selectedChatId);
+  const isRunning = chat && chat.status === "running";
+  runBtn.disabled = !authed || !selectedChatId || Boolean(isRunning);
+  cancelBtn.disabled = !authed || !selectedChatId || !isRunning;
+}
+
+function addLogLine(chatId, line) {
+  const detail = ensureChatDetail(chatId);
+  detail.logs.push(`[${stamp()}] ${line}`);
+  if (detail.logs.length > 900) {
+    detail.logs.splice(0, detail.logs.length - 900);
+  }
+  if (selectedChatId === chatId) {
+    renderLogs();
+  }
+}
+
+function appendMessage(chatId, role, text, runId) {
+  const detail = ensureChatDetail(chatId);
+  detail.messages.push({
+    id: `msg_local_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    role,
+    text,
+    runId: runId || null,
+    createdAt: new Date().toISOString()
+  });
+  if (detail.messages.length > 220) {
+    detail.messages.splice(0, detail.messages.length - 220);
+  }
+}
+
+function mergeSummary(summary) {
+  const prev = chats.get(summary.id) || {};
+  chats.set(summary.id, {
+    ...prev,
+    ...summary
+  });
+}
+
+function renderChatList() {
+  chatList.innerHTML = "";
+
+  const sorted = toChatArray();
+  if (sorted.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "chat-empty";
+    empty.textContent = "No chats yet.";
+    chatList.appendChild(empty);
+    return;
+  }
+
+  sorted.forEach((chat) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `chat-item${chat.id === selectedChatId ? " selected" : ""}`;
+
+    const top = document.createElement("div");
+    top.className = "chat-item-top";
+
+    const title = document.createElement("span");
+    title.className = "chat-title";
+    title.textContent = chat.title || "Untitled";
+
+    const badge = document.createElement("span");
+    badge.className = `chat-badge status-${chat.status || "idle"}`;
+    badge.textContent = statusLabel(chat.status);
+
+    const preview = document.createElement("p");
+    preview.className = "chat-preview";
+    const hint =
+      chat.lastAssistantMessage || chat.lastUserMessage || (chat.status === "running" ? "Running..." : "No messages yet.");
+    preview.textContent = clip(hint, 92);
+
+    top.appendChild(title);
+    top.appendChild(badge);
+    btn.appendChild(top);
+    btn.appendChild(preview);
+
+    btn.addEventListener("click", () => {
+      selectChat(chat.id, true);
+    });
+
+    chatList.appendChild(btn);
+  });
+}
+
+function renderLogs() {
+  const detail = selectedChatId ? details.get(selectedChatId) : null;
+  if (!detail || !Array.isArray(detail.logs) || detail.logs.length === 0) {
+    logPanel.textContent = "No logs yet for this chat.";
+    return;
+  }
+  logPanel.textContent = detail.logs.join("\n");
+  logPanel.scrollTop = logPanel.scrollHeight;
+}
+
+function roleLabel(role) {
+  if (role === "assistant") {
+    return "Assistant";
+  }
+  return "You";
+}
+
+function formatShortTime(iso) {
+  if (!iso) {
+    return "";
+  }
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) {
+    return "";
+  }
+  return d.toLocaleTimeString("en-US", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function renderMessages() {
+  messagesPanel.innerHTML = "";
+
+  const detail = selectedChatId ? details.get(selectedChatId) : null;
+  if (!detail || !Array.isArray(detail.messages) || detail.messages.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "chat-empty";
+    empty.textContent = "No messages yet in this chat.";
+    messagesPanel.appendChild(empty);
+    return;
+  }
+
+  detail.messages.forEach((msg) => {
+    const box = document.createElement("article");
+    box.className = `message message-${msg.role || "user"}`;
+
+    const meta = document.createElement("div");
+    meta.className = "message-meta";
+    meta.textContent = `${roleLabel(msg.role)} ${formatShortTime(msg.createdAt)}`;
+
+    const body = document.createElement("div");
+    body.className = "message-body";
+    body.textContent = msg.text || "";
+
+    box.appendChild(meta);
+    box.appendChild(body);
+    messagesPanel.appendChild(box);
+  });
+}
+
+function renderFinal() {
+  const detail = selectedChatId ? details.get(selectedChatId) : null;
+  if (!detail || !Array.isArray(detail.messages)) {
+    finalPanel.textContent = "";
+    return;
+  }
+
+  let lastAssistant = "";
+  for (let i = detail.messages.length - 1; i >= 0; i -= 1) {
+    if (detail.messages[i].role === "assistant") {
+      lastAssistant = detail.messages[i].text || "";
+      break;
+    }
+  }
+
+  if (!lastAssistant) {
+    const summary = getChatSummary(selectedChatId);
+    lastAssistant = (summary && summary.lastAssistantMessage) || "";
+  }
+
+  finalPanel.textContent = lastAssistant;
+}
+
+function selectChat(chatId, requestDetail) {
+  selectedChatId = chatId;
+  const chat = getChatSummary(chatId);
+
+  selectedChatName.textContent = chat ? chat.title : "None";
+  if (chat) {
+    if (chat.cwd) {
+      cwdInput.value = chat.cwd;
+    }
+    modeSelect.value = chat.mode === "workspace-write" ? "workspace-write" : "read-only";
+  }
+
+  renderChatList();
+  renderMessages();
+  renderLogs();
+  renderFinal();
+  setActionState();
+
+  if (requestDetail && chatId) {
+    send({ type: "get_chat", chatId });
+  }
+}
+
+function applyDetail(detail) {
+  details.set(detail.id, {
+    ...detail,
+    logs: Array.isArray(detail.logs) ? detail.logs.slice() : [],
+    messages: Array.isArray(detail.messages) ? detail.messages.slice() : [],
+    runs: Array.isArray(detail.runs) ? detail.runs.slice() : []
+  });
+  mergeSummary(detail);
+}
+
+function eventSummary(event) {
+  const eventType = event.type || event.method || "unknown";
+
+  if (eventType === "item/agentMessage/delta") {
     const delta = event.params?.delta || "";
-    liveAnswer += delta;
-    finalPanel.textContent = liveAnswer;
     return `assistant(delta): ${delta}`;
   }
 
-  if (eType === "item.completed") {
-    const item = event.item;
-    if (item?.type === "agent_message" && typeof item.text === "string") {
-      liveAnswer = item.text;
-      finalPanel.textContent = liveAnswer;
-      return "assistant: complete message";
-    }
-    if (item?.type === "command_execution") {
+  if (eventType === "item.completed") {
+    const item = event.item || {};
+    if (item.type === "command_execution") {
       return `cmd: ${item.command || "(command)"}`;
     }
+    if (item.type === "agent_message" && typeof item.text === "string") {
+      return "assistant: full message";
+    }
   }
 
-  if (eType === "item/completed") {
-    const item = event.params?.item;
-    if (item?.type === "agentMessage" && typeof item.text === "string") {
-      liveAnswer = item.text;
-      finalPanel.textContent = liveAnswer;
-      return "assistant: complete message";
-    }
-    if (item?.type === "commandExecution") {
+  if (eventType === "item/completed") {
+    const item = event.params?.item || {};
+    if (item.type === "commandExecution") {
       return `cmd: ${item.command || "(command)"}`;
     }
+    if (item.type === "agentMessage" && typeof item.text === "string") {
+      return "assistant: full message";
+    }
   }
 
-  if (eType === "turn.completed" || eType === "turn/completed") {
-    return "turn completed";
+  return eventType;
+}
+
+function applyRunEvent(chatId, runId, event) {
+  const detail = ensureChatDetail(chatId);
+  const eventType = event.type || event.method || "unknown";
+
+  if (eventType === "item/agentMessage/delta") {
+    const key = `${chatId}:${runId}`;
+    const prev = streamCache.get(key) || "";
+    const delta = event.params?.delta || "";
+    streamCache.set(key, prev + delta);
+
+    if (selectedChatId === chatId) {
+      finalPanel.textContent = streamCache.get(key);
+    }
   }
 
-  if (eType === "turn.failed" || eType === "turn/failed") {
-    return "turn failed";
+  if (eventType === "item.completed") {
+    const item = event.item || {};
+    if (item.type === "agent_message" && typeof item.text === "string") {
+      const key = `${chatId}:${runId}`;
+      streamCache.set(key, item.text);
+      if (selectedChatId === chatId) {
+        finalPanel.textContent = item.text;
+      }
+    }
   }
 
-  return eType;
+  if (eventType === "item/completed") {
+    const item = event.params?.item || {};
+    if (item.type === "agentMessage" && typeof item.text === "string") {
+      const key = `${chatId}:${runId}`;
+      streamCache.set(key, item.text);
+      if (selectedChatId === chatId) {
+        finalPanel.textContent = item.text;
+      }
+    }
+  }
+
+  const summary = eventSummary(event);
+  addLogLine(chatId, summary);
+
+  if (!Array.isArray(detail.logs)) {
+    detail.logs = [];
+  }
 }
 
 function handleServerMessage(data) {
   if (data.type === "hello") {
     requiresToken = Boolean(data.requiresToken);
     authed = !requiresToken;
-    cwdInput.value = data.defaultCwd || "";
     showTokenCard(requiresToken);
-    setRunState(false);
-    setStatus(requiresToken ? "Verbunden (Token noetig)" : "Verbunden", true);
-    log("Server verbunden.");
+    setStatus(requiresToken ? "Connected (token required)" : "Connected", true);
+    setActionState();
     return;
   }
 
   if (data.type === "auth/ok") {
     authed = true;
-    setRunState(false);
     showTokenCard(false);
-    setStatus("Authentifiziert", true);
-    log("Token akzeptiert.");
+    setStatus("Authenticated", true);
+    setActionState();
     return;
   }
 
   if (data.type === "auth/error") {
     authed = false;
-    setRunState(false);
     showTokenCard(true);
-    setStatus("Token fehlgeschlagen", true);
-    log(`Auth-Fehler: ${data.error || "unbekannt"}`);
+    setStatus("Auth failed", true);
+    addLogLine(selectedChatId || "global", `Auth error: ${data.error || "unknown"}`);
+    setActionState();
     return;
   }
 
   if (data.type === "server/error") {
-    log(`Server-Fehler: ${data.error || "unbekannt"}`);
+    if (selectedChatId) {
+      addLogLine(selectedChatId, `server error: ${data.error || "unknown"}`);
+    }
+    return;
+  }
+
+  if (data.type === "chats/snapshot") {
+    chats.clear();
+
+    const list = Array.isArray(data.chats) ? data.chats : [];
+    list.forEach((chat) => {
+      mergeSummary(chat);
+      ensureChatDetail(chat.id);
+    });
+
+    renderChatList();
+
+    if (!selectedChatId || !chats.has(selectedChatId)) {
+      const first = toChatArray()[0];
+      if (first) {
+        selectChat(first.id, true);
+      }
+    } else {
+      selectChat(selectedChatId, true);
+    }
+
+    return;
+  }
+
+  if (data.type === "chat/created") {
+    if (!data.chat || !data.chat.id) {
+      return;
+    }
+    mergeSummary(data.chat);
+    ensureChatDetail(data.chat.id);
+    renderChatList();
+
+    if (!selectedChatId) {
+      selectChat(data.chat.id, true);
+    }
+    return;
+  }
+
+  if (data.type === "chat/updated") {
+    if (!data.chat || !data.chat.id) {
+      return;
+    }
+    mergeSummary(data.chat);
+    renderChatList();
+
+    if (selectedChatId === data.chat.id) {
+      selectedChatName.textContent = data.chat.title || "Untitled";
+      setActionState();
+    }
+    return;
+  }
+
+  if (data.type === "chat/detail") {
+    if (!data.chat || !data.chat.id) {
+      return;
+    }
+
+    applyDetail(data.chat);
+    renderChatList();
+
+    if (selectedChatId === data.chat.id) {
+      selectedChatName.textContent = data.chat.title || "Untitled";
+      if (data.chat.cwd) {
+        cwdInput.value = data.chat.cwd;
+      }
+      modeSelect.value = data.chat.mode === "workspace-write" ? "workspace-write" : "read-only";
+      renderMessages();
+      renderLogs();
+      renderFinal();
+      setActionState();
+    }
     return;
   }
 
   if (data.type === "run/accepted") {
-    lastRunId = data.runId || null;
-    liveAnswer = "";
-    finalPanel.textContent = "";
-    setRunState(true);
-    log(`Run gestartet (${data.mode}) in ${data.cwd}`);
-    log(`$ ${data.command}`);
+    const { chatId, runId } = data;
+    const detail = ensureChatDetail(chatId);
+
+    addLogLine(chatId, `run started (${data.mode}) in ${data.cwd}`);
+    addLogLine(chatId, `$ ${data.command}`);
+
+    if (!Array.isArray(detail.messages)) {
+      detail.messages = [];
+    }
+
+    const summary = getChatSummary(chatId);
+    if (summary) {
+      summary.status = "running";
+      summary.currentRunId = runId;
+      summary.updatedAt = new Date().toISOString();
+      chats.set(chatId, summary);
+    }
+
+    renderChatList();
+    if (selectedChatId === chatId) {
+      setActionState();
+    }
     return;
   }
 
   if (data.type === "run/event") {
-    const summary = extractEventSummary(data.event || {});
-    log(summary);
+    applyRunEvent(data.chatId, data.runId, data.event || {});
     return;
   }
 
   if (data.type === "run/raw") {
-    log(`raw: ${data.line || ""}`);
+    addLogLine(data.chatId, `raw: ${data.line || ""}`);
     return;
   }
 
   if (data.type === "run/stderr") {
-    log(`stderr: ${data.line || ""}`);
+    addLogLine(data.chatId, `stderr: ${data.line || ""}`);
     return;
   }
 
-  if (data.type === "run/completed") {
-    setRunState(false);
-    if (!liveAnswer && data.finalText) {
-      finalPanel.textContent = data.finalText;
-    }
-    log(`Run beendet (exit ${data.exitCode}).`);
-    return;
-  }
+  if (data.type === "run/completed" || data.type === "run/failed") {
+    const chatId = data.chatId;
+    const runId = data.runId;
+    const status = data.type === "run/completed" ? "completed" : "failed";
 
-  if (data.type === "run/failed") {
-    setRunState(false);
-    if (!liveAnswer && data.finalText) {
-      finalPanel.textContent = data.finalText;
+    addLogLine(chatId, `run ${status} (exit ${String(data.exitCode)})`);
+
+    if (data.finalText) {
+      appendMessage(chatId, "assistant", data.finalText, runId);
     }
-    log(`Run fehlgeschlagen (exit ${data.exitCode}, signal ${data.signal || "none"}).`);
+
+    const summary = getChatSummary(chatId);
+    if (summary) {
+      summary.status = data.type === "run/completed" ? "idle" : "failed";
+      summary.currentRunId = null;
+      summary.updatedAt = new Date().toISOString();
+      if (data.finalText) {
+        summary.lastAssistantMessage = data.finalText;
+      }
+      chats.set(chatId, summary);
+    }
+
+    if (selectedChatId === chatId) {
+      renderMessages();
+      renderFinal();
+      setActionState();
+      send({ type: "get_chat", chatId });
+    }
+
+    renderChatList();
     return;
   }
 
   if (data.type === "run/error") {
-    setRunState(false);
-    log(`Startfehler: ${data.error || "unknown"}`);
+    addLogLine(data.chatId, `start error: ${data.error || "unknown"}`);
+
+    const summary = getChatSummary(data.chatId);
+    if (summary) {
+      summary.status = "failed";
+      summary.currentRunId = null;
+      summary.lastError = data.error || "unknown";
+      summary.updatedAt = new Date().toISOString();
+      chats.set(data.chatId, summary);
+    }
+
+    if (selectedChatId === data.chatId) {
+      setActionState();
+      send({ type: "get_chat", chatId: data.chatId });
+    }
+
+    renderChatList();
     return;
   }
-
-  if (data.type === "pong") {
-    return;
-  }
-
-  log(`Unbekannte Nachricht: ${JSON.stringify(data)}`);
 }
 
 function connect() {
@@ -212,62 +612,104 @@ function connect() {
   ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
 
   ws.addEventListener("open", () => {
-    setStatus("Verbunden", true);
-    log("Socket offen.");
+    setStatus("Connected", true);
   });
 
   ws.addEventListener("message", (evt) => {
     try {
-      const data = JSON.parse(evt.data);
-      handleServerMessage(data);
+      handleServerMessage(JSON.parse(evt.data));
     } catch {
-      log(`Ungueltige Serverantwort: ${evt.data}`);
+      if (selectedChatId) {
+        addLogLine(selectedChatId, `invalid server payload: ${evt.data}`);
+      }
     }
   });
 
   ws.addEventListener("close", () => {
-    setStatus("Verbindung getrennt", false);
-    setRunState(false);
     authed = false;
+    setStatus("Disconnected", false);
     showTokenCard(requiresToken);
-    log("Socket geschlossen. Reconnect in 2s...");
+    setActionState();
     setTimeout(connect, 2000);
   });
 
   ws.addEventListener("error", () => {
-    setStatus("Verbindungsfehler", false);
+    setStatus("Connection error", false);
   });
 }
 
 runBtn.addEventListener("click", () => {
+  if (!selectedChatId) {
+    return;
+  }
+
   const prompt = promptInput.value.trim();
   const cwd = cwdInput.value.trim();
   const mode = modeSelect.value;
 
   if (!prompt) {
-    log("Bitte Prompt eingeben.");
+    addLogLine(selectedChatId, "prompt is empty");
     return;
   }
 
   if (!authed) {
-    log("Nicht authentifiziert.");
+    addLogLine(selectedChatId, "not authenticated");
     return;
   }
 
-  send({ type: "run", prompt, cwd, mode });
+  appendMessage(selectedChatId, "user", prompt, null);
+  renderMessages();
+
+  const summary = getChatSummary(selectedChatId);
+  if (summary) {
+    summary.lastUserMessage = prompt;
+    summary.status = "running";
+    summary.cwd = cwd;
+    summary.mode = mode;
+    summary.updatedAt = new Date().toISOString();
+    chats.set(selectedChatId, summary);
+  }
+
+  renderChatList();
+  setActionState();
+
+  send({
+    type: "run",
+    chatId: selectedChatId,
+    prompt,
+    cwd,
+    mode
+  });
 });
 
 cancelBtn.addEventListener("click", () => {
-  if (!running) {
+  if (!selectedChatId) {
     return;
   }
-  send({ type: "cancel", runId: lastRunId });
-  log("Stop angefordert...");
+  send({ type: "cancel", chatId: selectedChatId });
+  addLogLine(selectedChatId, "stop requested...");
 });
 
 authBtn.addEventListener("click", () => {
-  const token = tokenInput.value;
-  send({ type: "auth", token });
+  send({ type: "auth", token: tokenInput.value });
+});
+
+createChatBtn.addEventListener("click", () => {
+  if (!authed) {
+    return;
+  }
+  send({
+    type: "create_chat",
+    title: chatTitleInput.value.trim()
+  });
+  chatTitleInput.value = "";
+});
+
+chatTitleInput.addEventListener("keydown", (evt) => {
+  if (evt.key === "Enter") {
+    evt.preventDefault();
+    createChatBtn.click();
+  }
 });
 
 presets.forEach((preset) => {

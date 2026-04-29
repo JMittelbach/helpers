@@ -16,57 +16,57 @@ section() {
 section "Codex Mobile Bridge - Prereq Check"
 
 if command -v brew >/dev/null 2>&1; then
-  pass "Homebrew gefunden: $(brew --version | head -n 1)"
+  pass "Homebrew found: $(brew --version | head -n 1)"
 else
-  warn "Homebrew fehlt. Installieren: /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+  warn "Homebrew is missing. Install: /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
 fi
 
 if command -v node >/dev/null 2>&1; then
-  pass "node gefunden: $(node -v)"
+  pass "node found: $(node -v)"
 else
-  warn "node fehlt. Installieren (empfohlen): brew install node@24"
-  warn "Danach in PATH: echo 'export PATH=\"/opt/homebrew/opt/node@24/bin:\$PATH\"' >> ~/.zprofile && source ~/.zprofile"
+  warn "node is missing. Recommended install: brew install node@24"
+  warn "Then add to PATH: echo 'export PATH=\"/opt/homebrew/opt/node@24/bin:\$PATH\"' >> ~/.zprofile && source ~/.zprofile"
 fi
 
 if command -v npm >/dev/null 2>&1; then
-  pass "npm gefunden: $(npm -v)"
+  pass "npm found: $(npm -v)"
 else
-  warn "npm fehlt (kommt mit Node)."
+  warn "npm is missing (it ships with Node)."
 fi
 
 if command -v codex >/dev/null 2>&1; then
-  pass "codex gefunden: $(command -v codex)"
+  pass "codex found: $(command -v codex)"
 else
   if codex_from_extension="$(bash ./scripts/find-codex-bin.sh 2>/dev/null)"; then
-    warn "codex nicht im PATH, aber vorhanden: $codex_from_extension"
+    warn "codex is not in PATH, but a binary was found: $codex_from_extension"
     warn "Fix: bash ./scripts/fix-codex-path.sh"
-    warn "Oder .env setzen: CODEX_BIN=$codex_from_extension"
+    warn "Or set in .env: CODEX_BIN=$codex_from_extension"
   else
-    warn "codex fehlt. Installiere Codex CLI oder stelle den Pfad in PATH."
+    warn "codex is missing. Install Codex CLI or fix your PATH."
   fi
 fi
 
 if command -v cloudflared >/dev/null 2>&1; then
-  pass "cloudflared gefunden: $(cloudflared --version | head -n 1)"
+  pass "cloudflared found: $(cloudflared --version | head -n 1)"
 else
-  warn "cloudflared fehlt. Fuer Zugriff von jedem Netz: brew install cloudflared"
+  warn "cloudflared is missing. For any-network access: brew install cloudflared"
 fi
 
-section "Projektstatus"
+section "Project Status"
 if [ -f "package.json" ]; then
-  pass "package.json vorhanden"
+  pass "package.json found"
 else
-  warn "package.json fehlt"
+  warn "package.json is missing"
 fi
 
 if [ -f ".env" ]; then
-  pass ".env vorhanden"
+  pass ".env found"
 else
-  warn ".env fehlt. Erzeuge: cp .env.example .env"
+  warn ".env is missing. Create it with: cp .env.example .env"
 fi
 
-section "Naechste Schritte"
-printf '1) Node installieren\n'
+section "Next Steps"
+printf '1) Install Node\n'
 printf '2) npm install\n'
 printf '3) cp .env.example .env\n'
 printf '4) npm start\n'
