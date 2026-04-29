@@ -13,6 +13,7 @@ const chatList = document.getElementById("chatList");
 const selectedChatName = document.getElementById("selectedChatName");
 const selectedChatSource = document.getElementById("selectedChatSource");
 const readOnlyHint = document.getElementById("readOnlyHint");
+const cloneToLocalBtn = document.getElementById("cloneToLocalBtn");
 const cwdInput = document.getElementById("cwdInput");
 const modeSelect = document.getElementById("modeSelect");
 const promptInput = document.getElementById("promptInput");
@@ -58,6 +59,7 @@ let selectedChatId = null;
 const chats = new Map();
 const details = new Map();
 const streamCache = new Map();
+const MIRROR_AUTO_REFRESH_MS = 5000;
 const fileState = {
   roots: [],
   currentPath: "",
@@ -229,6 +231,8 @@ function setActionState() {
   runBtn.disabled = disableRunControls;
   runBtn.textContent = canContinueMirror ? "Continue" : "Run";
   cancelBtn.disabled = !authed || !hasSelection || !isRunning || !canRun;
+  cloneToLocalBtn.disabled = !authed || !hasSelection;
+  cloneToLocalBtn.classList.toggle("hidden", !hasSelection || canRun || !isReadOnly);
   createChatBtn.disabled = !authed;
   refreshMirrorBtn.disabled = !authed;
   fileRootSelect.disabled = !authed || fileState.roots.length === 0;
@@ -728,6 +732,13 @@ function handleServerMessage(data) {
     return;
   }
 
+  if (data.type === "chat/cloned") {
+    if (data.chatId) {
+      selectChat(data.chatId, true);
+    }
+    return;
+  }
+
   if (data.type === "chat/updated") {
     if (!data.chat || !data.chat.id) {
       return;
@@ -980,6 +991,20 @@ createChatBtn.addEventListener("click", () => {
   chatTitleInput.value = "";
 });
 
+cloneToLocalBtn.addEventListener("click", () => {
+  if (!authed || !selectedChatId) {
+    return;
+  }
+  const selected = getChatSummary(selectedChatId);
+  if (!selected) {
+    return;
+  }
+  send({
+    type: "clone_chat",
+    sourceChatId: selected.id
+  });
+});
+
 refreshMirrorBtn.addEventListener("click", () => {
   if (!authed) {
     return;
@@ -1039,3 +1064,9 @@ connect();
 setInterval(() => {
   send({ type: "ping" });
 }, 20000);
+setInterval(() => {
+  if (!authed || !ws || ws.readyState !== 1) {
+    return;
+  }
+  send({ type: "refresh_mirror" });
+}, MIRROR_AUTO_REFRESH_MS);

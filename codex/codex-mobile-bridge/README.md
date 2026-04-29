@@ -25,8 +25,10 @@ It now also mirrors:
 Mirror limits:
 - VS Code mirror chats are not controllable from this app (`Run/Stop` disabled).
 - Codex session mirror chats can be continued with new prompts (uses `codex exec resume`).
+- Any mirror chat can be copied into a new editable local chat from the UI (`Copy To Editable Chat`).
 - Import depends on what VS Code writes to local `chatSessions` files.
 - Some in-progress threads may lag or appear partial depending on VS Code storage format.
+- The app auto-refreshes mirror data in the background every few seconds.
 
 ## Project Structure
 

@@ -425,6 +425,47 @@ function createChat(title) {
   return chat;
 }
 
+function cloneAnyChatToLocal(sourceChat, requestedTitle) {
+  const sourceTitle = sourceChat && sourceChat.title ? sourceChat.title : "Imported chat";
+  const cloneTitle =
+    typeof requestedTitle === "string" && requestedTitle.trim()
+      ? requestedTitle.trim()
+      : `Continue: ${sourceTitle}`.slice(0, 96);
+  const chat = makeChat(cloneTitle);
+
+  if (sourceChat && Array.isArray(sourceChat.messages)) {
+    chat.messages = sourceChat.messages
+      .map((msg) => ({
+        id: randomId("msg"),
+        role: msg && msg.role === "assistant" ? "assistant" : "user",
+        text: typeof msg?.text === "string" ? msg.text : "",
+        runId: null,
+        createdAt: typeof msg?.createdAt === "string" ? msg.createdAt : nowIso()
+      }))
+      .filter((msg) => msg.text);
+    trimArray(chat.messages, MAX_MESSAGES_PER_CHAT);
+  }
+
+  if (sourceChat && sourceChat.cwd) {
+    const safeCwd = resolveCwd(sourceChat.cwd);
+    if (safeCwd) {
+      chat.cwd = safeCwd;
+    }
+  }
+
+  chat.mode = "read-only";
+  chat.logs = [
+    `[clone] source=${sourceChat?.id || "unknown"}`,
+    `[clone] title=${sourceTitle}`
+  ];
+  chat.updatedAt = nowIso();
+
+  chats.set(chat.id, chat);
+  getRuntime(chat.id);
+  schedulePersist();
+  return chat;
+}
+
 function addLogLine(chat, line) {
   chat.logs.push(line);
   trimArray(chat.logs, MAX_LOG_LINES);
@@ -1121,14 +1162,20 @@ function parseCodexSessionChatFromFile(filePath, stat, indexMeta) {
 }
 
 function mirrorSignature(chat) {
+  const lastUser = lastMessageByRole(chat, "user");
+  const lastAssistant = lastMessageByRole(chat, "assistant");
   return [
     chat.updatedAt,
     chat.status,
+    chat.currentRunId || "",
     chat.messages.length,
     chat.runs.length,
     chat.lastError,
     chat.title,
-    chat.source
+    chat.source,
+    `${lastUser.length}:${lastAssistant.length}`,
+    lastUser.slice(-220),
+    lastAssistant.slice(-220)
   ].join("|");
 }
 
@@ -1405,6 +1452,19 @@ wss.on("connection", (ws) => {
     if (msg.type === "create_chat") {
       const chat = createChat(msg.title);
       broadcastToAuthed({ type: "chat/created", chat: toChatSummary(chat) });
+      return;
+    }
+
+    if (msg.type === "clone_chat") {
+      const sourceChatId = typeof msg.sourceChatId === "string" ? msg.sourceChatId : "";
+      const sourceChat = getAnyChat(sourceChatId);
+      if (!sourceChat) {
+        send(ws, { type: "server/error", error: "Source chat not found." });
+        return;
+      }
+      const cloned = cloneAnyChatToLocal(sourceChat, msg.title);
+      broadcastToAuthed({ type: "chat/created", chat: toChatSummary(cloned) });
+      send(ws, { type: "chat/cloned", sourceChatId, chatId: cloned.id });
       return;
     }
 
