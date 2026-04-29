@@ -26,6 +26,19 @@ const STORE_PATH = path.join(STORE_DIR, "chats.json");
 const MAX_LOG_LINES = Number(process.env.MAX_LOG_LINES || 700);
 const MAX_MESSAGES_PER_CHAT = Number(process.env.MAX_MESSAGES_PER_CHAT || 120);
 const MAX_RUNS_PER_CHAT = Number(process.env.MAX_RUNS_PER_CHAT || 80);
+const VSCODE_MIRROR_ENABLED = process.env.VSCODE_MIRROR_ENABLED !== "0";
+const VSCODE_MIRROR_SCAN_MS = Math.max(Number(process.env.VSCODE_MIRROR_SCAN_MS || 3000), 1200);
+const VSCODE_MIRROR_MAX_FILES = Math.max(Number(process.env.VSCODE_MIRROR_MAX_FILES || 300), 20);
+const DEFAULT_VSCODE_MIRROR_ROOTS = [
+  path.join(os.homedir(), "Library/Application Support/Code/User/workspaceStorage"),
+  path.join(os.homedir(), "Library/Application Support/Code - Insiders/User/workspaceStorage"),
+  path.join(os.homedir(), "Library/Application Support/Code/User/globalStorage/emptyWindowChatSessions"),
+  path.join(os.homedir(), "Library/Application Support/Code - Insiders/User/globalStorage/emptyWindowChatSessions")
+];
+const VSCODE_MIRROR_ROOTS = (process.env.VSCODE_MIRROR_ROOTS || DEFAULT_VSCODE_MIRROR_ROOTS.join(","))
+  .split(",")
+  .map((p) => p.trim())
+  .filter(Boolean);
 
 function nowIso() {
   return new Date().toISOString();
@@ -148,6 +161,8 @@ function makeChat(title) {
   const ts = nowIso();
   return {
     id: randomId("chat"),
+    source: "local",
+    readOnly: false,
     title: title || "New chat",
     createdAt: ts,
     updatedAt: ts,
@@ -174,6 +189,8 @@ function lastMessageByRole(chat, role) {
 function toChatSummary(chat) {
   return {
     id: chat.id,
+    source: chat.source || "local",
+    readOnly: Boolean(chat.readOnly),
     title: chat.title,
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
@@ -194,14 +211,17 @@ function toChatDetail(chat) {
     ...toChatSummary(chat),
     logs: chat.logs,
     messages: chat.messages,
-    runs: chat.runs
+    runs: chat.runs,
+    mirror: chat.mirror || null
   };
 }
 
 const chats = new Map();
+const mirroredChats = new Map();
 const runtimes = new Map();
 const clients = new Map();
 let persistTimer = null;
+let mirrorScanTimer = null;
 
 function getRuntime(chatId) {
   if (!runtimes.has(chatId)) {
@@ -216,8 +236,12 @@ function getRuntime(chatId) {
   return runtimes.get(chatId);
 }
 
+function getAnyChat(chatId) {
+  return chats.get(chatId) || mirroredChats.get(chatId) || null;
+}
+
 function listChatsSorted() {
-  return Array.from(chats.values())
+  return [...Array.from(chats.values()), ...Array.from(mirroredChats.values())]
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
     .map((chat) => toChatSummary(chat));
 }
@@ -281,6 +305,8 @@ function restoreChats() {
 
           const chat = {
             id: entry.id,
+            source: "local",
+            readOnly: false,
             title: typeof entry.title === "string" && entry.title.trim() ? entry.title.trim() : "Restored chat",
             createdAt: typeof entry.createdAt === "string" ? entry.createdAt : nowIso(),
             updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : nowIso(),
@@ -349,6 +375,515 @@ function findRun(chat, runId) {
     }
   }
   return null;
+}
+
+function safeJsonParse(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function deepClone(obj) {
+  return JSON.parse(JSON.stringify(obj));
+}
+
+function normalizePathSegments(rawPath) {
+  if (Array.isArray(rawPath)) {
+    return rawPath.map((p) => (typeof p === "string" && /^\d+$/.test(p) ? Number(p) : p)).filter((p) => p !== "");
+  }
+
+  if (typeof rawPath !== "string") {
+    return [];
+  }
+
+  const trimmed = rawPath.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    const parsed = safeJsonParse(trimmed);
+    if (Array.isArray(parsed)) {
+      return normalizePathSegments(parsed);
+    }
+  }
+
+  return trimmed
+    .split(".")
+    .filter(Boolean)
+    .map((p) => (/^\d+$/.test(p) ? Number(p) : p));
+}
+
+function applyDeltaAtPath(target, rawPath, value) {
+  const segments = normalizePathSegments(rawPath);
+  if (!segments.length || !target || typeof target !== "object") {
+    return;
+  }
+
+  let node = target;
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    const seg = segments[i];
+    const nextSeg = segments[i + 1];
+
+    if (typeof seg === "number") {
+      if (!Array.isArray(node)) {
+        return;
+      }
+      if (node[seg] === undefined || node[seg] === null || typeof node[seg] !== "object") {
+        node[seg] = typeof nextSeg === "number" ? [] : {};
+      }
+      node = node[seg];
+      continue;
+    }
+
+    if (node[seg] === undefined || node[seg] === null || typeof node[seg] !== "object") {
+      node[seg] = typeof nextSeg === "number" ? [] : {};
+    }
+    node = node[seg];
+  }
+
+  const finalSeg = segments[segments.length - 1];
+  if (typeof finalSeg === "number") {
+    if (!Array.isArray(node)) {
+      return;
+    }
+    node[finalSeg] = value;
+    return;
+  }
+
+  node[finalSeg] = value;
+}
+
+function parseSessionJsonl(raw) {
+  const lines = raw.split(/\r?\n/).filter(Boolean);
+  let session = null;
+
+  for (const line of lines) {
+    const parsed = safeJsonParse(line);
+    if (!parsed || typeof parsed !== "object") {
+      continue;
+    }
+
+    if (parsed.kind === 0 && parsed.v && typeof parsed.v === "object") {
+      session = deepClone(parsed.v);
+      continue;
+    }
+
+    if ((parsed.kind === 1 || parsed.kind === 2) && session && parsed.k !== undefined) {
+      applyDeltaAtPath(session, parsed.k, parsed.v);
+      continue;
+    }
+
+    if (parsed.v && typeof parsed.v === "object") {
+      session = deepClone(parsed.v);
+      continue;
+    }
+
+    if (!session && (parsed.sessionId || parsed.requests || parsed.pendingRequests)) {
+      session = deepClone(parsed);
+    }
+  }
+
+  return session;
+}
+
+function readSessionFromFile(filePath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+
+  if (!raw.trim()) {
+    return null;
+  }
+
+  if (filePath.endsWith(".jsonl")) {
+    return parseSessionJsonl(raw);
+  }
+
+  const parsed = safeJsonParse(raw);
+  if (!parsed || typeof parsed !== "object") {
+    return null;
+  }
+  if (parsed.v && typeof parsed.v === "object") {
+    return parsed.v;
+  }
+  return parsed;
+}
+
+function toIsoFromAny(value, fallbackMs) {
+  if (typeof value === "string") {
+    const ms = Date.parse(value);
+    if (!Number.isNaN(ms)) {
+      return new Date(ms).toISOString();
+    }
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const ms = value > 10_000_000_000 ? value : value * 1000;
+    return new Date(ms).toISOString();
+  }
+
+  return new Date(fallbackMs || Date.now()).toISOString();
+}
+
+function textFromMessage(message) {
+  if (typeof message === "string") {
+    return message.trim();
+  }
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  if (typeof message.text === "string" && message.text.trim()) {
+    return message.text.trim();
+  }
+
+  if (Array.isArray(message.parts)) {
+    const bits = [];
+    for (const part of message.parts) {
+      if (typeof part === "string" && part.trim()) {
+        bits.push(part.trim());
+      } else if (part && typeof part === "object") {
+        if (typeof part.text === "string" && part.text.trim()) {
+          bits.push(part.text.trim());
+        }
+        if (typeof part.value === "string" && part.value.trim()) {
+          bits.push(part.value.trim());
+        }
+      }
+    }
+    return bits.join("\n").trim();
+  }
+
+  return "";
+}
+
+function collectStrings(value, out, depth = 0) {
+  if (depth > 7 || out.length >= 40 || value === null || value === undefined) {
+    return;
+  }
+
+  if (typeof value === "string") {
+    const t = value.trim();
+    if (t) {
+      out.push(t);
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectStrings(item, out, depth + 1);
+      if (out.length >= 40) {
+        return;
+      }
+    }
+    return;
+  }
+
+  if (typeof value === "object") {
+    if (typeof value.text === "string") {
+      collectStrings(value.text, out, depth + 1);
+    }
+    if (typeof value.value === "string") {
+      collectStrings(value.value, out, depth + 1);
+    }
+    if (typeof value.markdown === "string") {
+      collectStrings(value.markdown, out, depth + 1);
+    }
+
+    const nestedKeys = ["response", "result", "parts", "items", "content", "messages"];
+    for (const key of nestedKeys) {
+      if (value[key] !== undefined) {
+        collectStrings(value[key], out, depth + 1);
+      }
+    }
+  }
+}
+
+function extractAssistantTextFromRequest(request) {
+  const candidates = [];
+  collectStrings(request.response, candidates);
+  collectStrings(request.result, candidates);
+  collectStrings(request.responseMarkdownInfo, candidates);
+
+  const unique = [];
+  const seen = new Set();
+  for (const c of candidates) {
+    const clean = c.replace(/\s+/g, " ").trim();
+    if (!clean) {
+      continue;
+    }
+    if (clean.length < 3) {
+      continue;
+    }
+    if (seen.has(clean)) {
+      continue;
+    }
+    seen.add(clean);
+    unique.push(clean);
+  }
+
+  return unique.join("\n\n").slice(0, 12000);
+}
+
+function toMirrorChat(session, filePath, stat) {
+  if (!session || typeof session !== "object") {
+    return null;
+  }
+
+  const sessionId =
+    (typeof session.sessionId === "string" && session.sessionId) ||
+    path.basename(filePath).replace(/\.(json|jsonl)$/i, "");
+  if (!sessionId) {
+    return null;
+  }
+
+  const requests = Array.isArray(session.requests) ? session.requests : [];
+  const pendingRequests = Array.isArray(session.pendingRequests) ? session.pendingRequests : [];
+  const messages = [];
+  const runs = [];
+
+  for (const req of requests) {
+    const requestId = (req && typeof req.requestId === "string" && req.requestId) || randomId("vscode_req");
+    const requestTs = toIsoFromAny(req?.timestamp, stat.mtimeMs);
+
+    const userText = textFromMessage(req?.message);
+    if (userText) {
+      messages.push({
+        id: `vscode_msg_user_${requestId}`,
+        role: "user",
+        text: userText,
+        runId: requestId,
+        createdAt: requestTs
+      });
+    }
+
+    const assistantText = extractAssistantTextFromRequest(req || {});
+    if (assistantText) {
+      messages.push({
+        id: `vscode_msg_assistant_${requestId}`,
+        role: "assistant",
+        text: assistantText,
+        runId: requestId,
+        createdAt: requestTs
+      });
+    }
+
+    runs.push({
+      id: `vscode_run_${requestId}`,
+      createdAt: requestTs,
+      completedAt: requestTs,
+      status: "completed",
+      mode: "read-only",
+      cwd: DEFAULT_CWD,
+      prompt: userText || "",
+      command: "vscode-chat-session (mirrored)",
+      exitCode: 0,
+      signal: null,
+      finalText: assistantText || "",
+      error: ""
+    });
+  }
+
+  for (const req of pendingRequests) {
+    const pendingId = (req && typeof req.requestId === "string" && req.requestId) || randomId("vscode_pending");
+    const requestTs = toIsoFromAny(req?.timestamp, stat.mtimeMs);
+    const userText = textFromMessage(req?.message);
+    if (userText) {
+      messages.push({
+        id: `vscode_msg_pending_${pendingId}`,
+        role: "user",
+        text: userText,
+        runId: pendingId,
+        createdAt: requestTs
+      });
+    }
+
+    runs.push({
+      id: `vscode_run_${pendingId}`,
+      createdAt: requestTs,
+      completedAt: null,
+      status: "running",
+      mode: "read-only",
+      cwd: DEFAULT_CWD,
+      prompt: userText || "",
+      command: "vscode-chat-session (mirrored, pending)",
+      exitCode: null,
+      signal: null,
+      finalText: "",
+      error: ""
+    });
+  }
+
+  const createdAt = toIsoFromAny(session.creationDate, stat.mtimeMs);
+  const updatedAt = toIsoFromAny(session.lastMessageDate || session.creationDate, stat.mtimeMs);
+  const titleSeed = textFromMessage(requests[0]?.message) || textFromMessage(pendingRequests[0]?.message) || sessionId;
+  const title = titleSeed.slice(0, 70) || `VS Code ${sessionId.slice(0, 8)}`;
+
+  const mirrorInfo = {
+    sessionId,
+    path: filePath,
+    source: "vscode",
+    fileType: path.extname(filePath).replace(".", ""),
+    pendingCount: pendingRequests.length
+  };
+
+  return {
+    id: `vscode:${sessionId}`,
+    source: "vscode-mirror",
+    readOnly: true,
+    title,
+    createdAt,
+    updatedAt,
+    status: pendingRequests.length > 0 ? "running" : "idle",
+    currentRunId: pendingRequests.length > 0 ? `vscode_run_${pendingRequests[0]?.requestId || "pending"}` : null,
+    lastError: "",
+    cwd: DEFAULT_CWD,
+    mode: "read-only",
+    logs: [
+      `[mirror] VS Code session from ${filePath}`,
+      `[mirror] requests=${requests.length} pending=${pendingRequests.length}`
+    ],
+    messages: messages.slice(-MAX_MESSAGES_PER_CHAT),
+    runs: runs.slice(-MAX_RUNS_PER_CHAT),
+    mirror: mirrorInfo
+  };
+}
+
+function addSessionFilesFromDir(dirPath, out) {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (!/\.(json|jsonl)$/i.test(entry.name)) {
+      continue;
+    }
+
+    const fullPath = path.join(dirPath, entry.name);
+    try {
+      const stat = fs.statSync(fullPath);
+      out.push({ path: fullPath, mtimeMs: stat.mtimeMs, size: stat.size });
+    } catch {
+      continue;
+    }
+  }
+}
+
+function findMirrorSessionFiles() {
+  const files = [];
+
+  for (const root of VSCODE_MIRROR_ROOTS) {
+    let stat;
+    try {
+      stat = fs.statSync(root);
+    } catch {
+      continue;
+    }
+    if (!stat.isDirectory()) {
+      continue;
+    }
+
+    if (path.basename(root) === "workspaceStorage") {
+      let workspaces = [];
+      try {
+        workspaces = fs.readdirSync(root, { withFileTypes: true });
+      } catch {
+        workspaces = [];
+      }
+      for (const wsEntry of workspaces) {
+        if (!wsEntry.isDirectory()) {
+          continue;
+        }
+        addSessionFilesFromDir(path.join(root, wsEntry.name, "chatSessions"), files);
+      }
+      continue;
+    }
+
+    if (path.basename(root) === "emptyWindowChatSessions" || path.basename(root) === "chatSessions") {
+      addSessionFilesFromDir(root, files);
+      continue;
+    }
+
+    addSessionFilesFromDir(root, files);
+    addSessionFilesFromDir(path.join(root, "chatSessions"), files);
+  }
+
+  files.sort((a, b) => (a.mtimeMs < b.mtimeMs ? 1 : -1));
+  return files.slice(0, VSCODE_MIRROR_MAX_FILES);
+}
+
+function mirrorSignature(chat) {
+  return [
+    chat.updatedAt,
+    chat.status,
+    chat.messages.length,
+    chat.runs.length,
+    chat.lastError,
+    chat.title
+  ].join("|");
+}
+
+function syncVscodeMirrors() {
+  if (!VSCODE_MIRROR_ENABLED) {
+    return;
+  }
+
+  const files = findMirrorSessionFiles();
+  const nextMap = new Map();
+
+  for (const file of files) {
+    const session = readSessionFromFile(file.path);
+    const mirrorChat = toMirrorChat(session, file.path, file);
+    if (!mirrorChat) {
+      continue;
+    }
+    nextMap.set(mirrorChat.id, mirrorChat);
+  }
+
+  let changed = mirroredChats.size !== nextMap.size;
+  if (!changed) {
+    for (const [id, nextChat] of nextMap.entries()) {
+      const prevChat = mirroredChats.get(id);
+      if (!prevChat || mirrorSignature(prevChat) !== mirrorSignature(nextChat)) {
+        changed = true;
+        break;
+      }
+    }
+  }
+
+  if (!changed) {
+    return;
+  }
+
+  mirroredChats.clear();
+  for (const [id, chat] of nextMap.entries()) {
+    mirroredChats.set(id, chat);
+  }
+
+  broadcastToAuthed({
+    type: "chats/snapshot",
+    chats: listChatsSorted()
+  });
+}
+
+function startMirrorLoop() {
+  if (!VSCODE_MIRROR_ENABLED || mirrorScanTimer) {
+    return;
+  }
+  syncVscodeMirrors();
+  mirrorScanTimer = setInterval(syncVscodeMirrors, VSCODE_MIRROR_SCAN_MS);
 }
 
 restoreChats();
