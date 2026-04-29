@@ -7,15 +7,21 @@ Mobile-first web app to run Codex on your Mac from a phone browser.
 - Multi-chat workspace in the web app
 - Live run status for all web-app chats
 - Per-chat logs, messages, and latest answer
+- Read-only VS Code chat mirror (best-effort import from local session files)
 - Optional token auth (`APP_TOKEN`)
 - Workspace safety guard via `ALLOWED_ROOTS`
 - Optional Cloudflare quick tunnel for remote access
 
 ## Important Chat Scope
 
-This app shows chats that are created and run **inside this web app**.
+This app fully supports chats that are created and run **inside this web app**.
 
-It does **not** automatically import or mirror already-running chats from VS Code or other Codex clients.
+It now also mirrors VS Code chat session files as read-only chats (`source = vscode-mirror`).
+
+Mirror limits:
+- Mirror chats are not controllable from this app (`Run/Stop` disabled).
+- Import depends on what VS Code writes to local `chatSessions` files.
+- Some in-progress threads may lag or appear partial depending on VS Code storage format.
 
 ## Project Structure
 
@@ -99,3 +105,13 @@ npm run tunnel:cf
 - Set a strong `APP_TOKEN` in `.env`.
 - Keep `ALLOWED_ROOTS` narrow.
 - Do not expose an unauthenticated bridge to the public internet.
+
+## Optional Mirror Settings
+
+```bash
+VSCODE_MIRROR_ENABLED=1
+VSCODE_MIRROR_SCAN_MS=3000
+VSCODE_MIRROR_MAX_FILES=300
+# Optional custom roots (comma-separated)
+# VSCODE_MIRROR_ROOTS=/Users/you/Library/Application Support/Code/User/workspaceStorage
+```

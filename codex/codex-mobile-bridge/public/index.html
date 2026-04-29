@@ -42,6 +42,9 @@
           <input id="chatTitleInput" type="text" placeholder="New chat title" />
           <button id="createChatBtn" class="btn secondary">New</button>
         </div>
+        <div class="row">
+          <button id="refreshMirrorBtn" class="btn ghost" type="button">Refresh VS Code Mirror</button>
+        </div>
         <div id="chatList" class="chat-list"></div>
       </section>
 
@@ -51,6 +54,11 @@
           Selected chat:
           <strong id="selectedChatName">None</strong>
         </p>
+        <p class="meta-line">
+          Source:
+          <strong id="selectedChatSource">-</strong>
+        </p>
+        <p id="readOnlyHint" class="meta-line hidden">This chat is mirrored from VS Code and is read-only here.</p>
 
         <label for="cwdInput">Workspace</label>
         <input id="cwdInput" type="text" placeholder="/Users/jannes/Github" />

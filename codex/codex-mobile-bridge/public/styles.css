@@ -254,6 +254,18 @@ textarea {
   font-size: 0.96rem;
 }
 
+.chat-source {
+  margin-left: auto;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.16rem 0.44rem;
+  background: rgba(13, 88, 105, 0.11);
+  color: #13414b;
+}
+
 .chat-preview {
   margin: 0.28rem 0 0;
   color: var(--muted);

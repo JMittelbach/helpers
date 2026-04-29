@@ -645,6 +645,9 @@ function toMirrorChat(session, filePath, stat) {
 
   const requests = Array.isArray(session.requests) ? session.requests : [];
   const pendingRequests = Array.isArray(session.pendingRequests) ? session.pendingRequests : [];
+  if (requests.length === 0 && pendingRequests.length === 0) {
+    return null;
+  }
   const messages = [];
   const runs = [];
 
@@ -887,6 +890,7 @@ function startMirrorLoop() {
 }
 
 restoreChats();
+startMirrorLoop();
 
 const app = express();
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -899,7 +903,11 @@ app.get("/health", (_req, res) => {
     allowedRoots: ALLOWED_ROOTS,
     requiresToken: Boolean(APP_TOKEN),
     codexBin: CODEX_BIN,
-    chatCount: chats.size
+    chatCount: chats.size + mirroredChats.size,
+    localChatCount: chats.size,
+    mirroredChatCount: mirroredChats.size,
+    vscodeMirrorEnabled: VSCODE_MIRROR_ENABLED,
+    vscodeMirrorScanMs: VSCODE_MIRROR_SCAN_MS
   });
 });
 
@@ -961,9 +969,15 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    if (msg.type === "refresh_mirror") {
+      syncVscodeMirrors();
+      send(ws, { type: "mirror/refreshed", count: mirroredChats.size });
+      return;
+    }
+
     if (msg.type === "get_chat") {
       const chatId = typeof msg.chatId === "string" ? msg.chatId : "";
-      const chat = chats.get(chatId);
+      const chat = getAnyChat(chatId);
       if (!chat) {
         send(ws, { type: "server/error", error: "Chat not found." });
         return;
@@ -974,9 +988,17 @@ wss.on("connection", (ws) => {
 
     if (msg.type === "cancel") {
       const chatId = typeof msg.chatId === "string" ? msg.chatId : "";
-      const chat = chats.get(chatId);
+      const chat = getAnyChat(chatId);
+      if (!chat) {
+        send(ws, { type: "server/error", error: "Chat not found." });
+        return;
+      }
+      if (chat.readOnly) {
+        send(ws, { type: "server/error", error: "Mirrored VS Code chats are read-only in this app." });
+        return;
+      }
       const runtime = runtimes.get(chatId);
-      if (!chat || !runtime || !runtime.child) {
+      if (!runtime || !runtime.child) {
         send(ws, { type: "server/error", error: "No active run for this chat." });
         return;
       }
@@ -995,10 +1017,15 @@ wss.on("connection", (ws) => {
     }
 
     const chatId = typeof msg.chatId === "string" ? msg.chatId : "";
-    const chat = chats.get(chatId);
+    const chat = getAnyChat(chatId);
 
     if (!chat) {
       send(ws, { type: "server/error", error: "Chat not found." });
+      return;
+    }
+
+    if (chat.readOnly) {
+      send(ws, { type: "server/error", error: "Mirrored VS Code chats are read-only in this app." });
       return;
     }
 
@@ -1245,4 +1272,8 @@ server.listen(PORT, HOST, () => {
   console.log(`codex bin: ${CODEX_BIN}`);
   console.log(`token required: ${APP_TOKEN ? "yes" : "no"}`);
   console.log(`chat store: ${STORE_PATH}`);
+  console.log(`vscode mirror: ${VSCODE_MIRROR_ENABLED ? "on" : "off"} (${mirroredChats.size} mirrored chats)`);
+  if (VSCODE_MIRROR_ENABLED) {
+    console.log(`vscode mirror roots: ${VSCODE_MIRROR_ROOTS.join(", ")}`);
+  }
 });

@@ -5,8 +5,11 @@ const tokenInput = document.getElementById("tokenInput");
 const authBtn = document.getElementById("authBtn");
 const chatTitleInput = document.getElementById("chatTitleInput");
 const createChatBtn = document.getElementById("createChatBtn");
+const refreshMirrorBtn = document.getElementById("refreshMirrorBtn");
 const chatList = document.getElementById("chatList");
 const selectedChatName = document.getElementById("selectedChatName");
+const selectedChatSource = document.getElementById("selectedChatSource");
+const readOnlyHint = document.getElementById("readOnlyHint");
 const cwdInput = document.getElementById("cwdInput");
 const modeSelect = document.getElementById("modeSelect");
 const promptInput = document.getElementById("promptInput");
@@ -55,6 +58,16 @@ function statusLabel(status) {
     return "failed";
   }
   return "idle";
+}
+
+function sourceLabel(chat) {
+  if (!chat) {
+    return "-";
+  }
+  if (chat.source === "vscode-mirror") {
+    return "VS Code mirror (read-only)";
+  }
+  return "Web app (runnable)";
 }
 
 function setStatus(text, online) {
@@ -126,8 +139,20 @@ function toChatArray() {
 function setActionState() {
   const chat = getChatSummary(selectedChatId);
   const isRunning = chat && chat.status === "running";
-  runBtn.disabled = !authed || !selectedChatId || Boolean(isRunning);
-  cancelBtn.disabled = !authed || !selectedChatId || !isRunning;
+  const isReadOnly = Boolean(chat && chat.readOnly);
+  runBtn.disabled = !authed || !selectedChatId || Boolean(isRunning) || isReadOnly;
+  cancelBtn.disabled = !authed || !selectedChatId || !isRunning || isReadOnly;
+  createChatBtn.disabled = !authed;
+  refreshMirrorBtn.disabled = !authed;
+
+  cwdInput.disabled = isReadOnly;
+  modeSelect.disabled = isReadOnly;
+  promptInput.disabled = isReadOnly;
+  if (isReadOnly) {
+    promptInput.placeholder = "Mirrored VS Code chat (read-only)";
+  } else {
+    promptInput.placeholder = "Ask Codex what to do...";
+  }
 }
 
 function addLogLine(chatId, line) {
@@ -191,6 +216,10 @@ function renderChatList() {
     badge.className = `chat-badge status-${chat.status || "idle"}`;
     badge.textContent = statusLabel(chat.status);
 
+    const source = document.createElement("span");
+    source.className = "chat-source";
+    source.textContent = chat.source === "vscode-mirror" ? "vscode" : "web";
+
     const preview = document.createElement("p");
     preview.className = "chat-preview";
     const hint =
@@ -198,6 +227,7 @@ function renderChatList() {
     preview.textContent = clip(hint, 92);
 
     top.appendChild(title);
+    top.appendChild(source);
     top.appendChild(badge);
     btn.appendChild(top);
     btn.appendChild(preview);
@@ -300,6 +330,8 @@ function selectChat(chatId, requestDetail) {
   const chat = getChatSummary(chatId);
 
   selectedChatName.textContent = chat ? chat.title : "None";
+  selectedChatSource.textContent = sourceLabel(chat);
+  readOnlyHint.classList.toggle("hidden", !chat || !chat.readOnly);
   if (chat) {
     if (chat.cwd) {
       cwdInput.value = chat.cwd;
@@ -438,6 +470,13 @@ function handleServerMessage(data) {
     return;
   }
 
+  if (data.type === "mirror/refreshed") {
+    if (selectedChatId) {
+      addLogLine(selectedChatId, `mirror refreshed (${data.count || 0} mirrored chats)`);
+    }
+    return;
+  }
+
   if (data.type === "chats/snapshot") {
     chats.clear();
 
@@ -484,6 +523,8 @@ function handleServerMessage(data) {
 
     if (selectedChatId === data.chat.id) {
       selectedChatName.textContent = data.chat.title || "Untitled";
+      selectedChatSource.textContent = sourceLabel(data.chat);
+      readOnlyHint.classList.toggle("hidden", !data.chat.readOnly);
       setActionState();
     }
     return;
@@ -499,6 +540,8 @@ function handleServerMessage(data) {
 
     if (selectedChatId === data.chat.id) {
       selectedChatName.textContent = data.chat.title || "Untitled";
+      selectedChatSource.textContent = sourceLabel(data.chat);
+      readOnlyHint.classList.toggle("hidden", !data.chat.readOnly);
       if (data.chat.cwd) {
         cwdInput.value = data.chat.cwd;
       }
@@ -643,6 +686,12 @@ runBtn.addEventListener("click", () => {
     return;
   }
 
+  const selected = getChatSummary(selectedChatId);
+  if (selected && selected.readOnly) {
+    addLogLine(selectedChatId, "this is a mirrored VS Code chat (read-only here)");
+    return;
+  }
+
   const prompt = promptInput.value.trim();
   const cwd = cwdInput.value.trim();
   const mode = modeSelect.value;
@@ -686,6 +735,11 @@ cancelBtn.addEventListener("click", () => {
   if (!selectedChatId) {
     return;
   }
+  const selected = getChatSummary(selectedChatId);
+  if (selected && selected.readOnly) {
+    addLogLine(selectedChatId, "mirrored chats cannot be cancelled from this app");
+    return;
+  }
   send({ type: "cancel", chatId: selectedChatId });
   addLogLine(selectedChatId, "stop requested...");
 });
@@ -703,6 +757,13 @@ createChatBtn.addEventListener("click", () => {
     title: chatTitleInput.value.trim()
   });
   chatTitleInput.value = "";
+});
+
+refreshMirrorBtn.addEventListener("click", () => {
+  if (!authed) {
+    return;
+  }
+  send({ type: "refresh_mirror" });
 });
 
 chatTitleInput.addEventListener("keydown", (evt) => {
