@@ -1452,7 +1452,8 @@ wss.on("connection", (ws) => {
         send(ws, { type: "server/error", error: "Chat not found." });
         return;
       }
-      if (chat.readOnly) {
+      const canResumeMirror = canResumeCodexMirror(chat);
+      if (chat.readOnly && !canResumeMirror) {
         send(ws, { type: "server/error", error: "Mirrored chats are read-only in this app." });
         return;
       }
@@ -1483,7 +1484,8 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    if (chat.readOnly) {
+    const canResumeMirror = canResumeCodexMirror(chat);
+    if (chat.readOnly && !canResumeMirror) {
       send(ws, { type: "server/error", error: "Mirrored chats are read-only in this app." });
       return;
     }
@@ -1495,8 +1497,10 @@ wss.on("connection", (ws) => {
     }
 
     const prompt = typeof msg.prompt === "string" ? msg.prompt.trim() : "";
-    const mode = msg.mode === "workspace-write" ? "workspace-write" : "read-only";
-    const cwd = resolveCwd(msg.cwd || chat.cwd || DEFAULT_CWD);
+    const requestedMode = msg.mode === "workspace-write" ? "workspace-write" : "read-only";
+    const localCwd = resolveCwd(msg.cwd || chat.cwd || DEFAULT_CWD);
+    const fallbackCwd = resolveCwd(chat.cwd || DEFAULT_CWD) || ALLOWED_ROOTS[0] || DEFAULT_CWD;
+    const cwd = canResumeMirror ? fallbackCwd : localCwd;
 
     if (!prompt) {
       send(ws, { type: "server/error", error: "Prompt is empty." });
@@ -1508,7 +1512,7 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    if (!cwd) {
+    if (!canResumeMirror && !cwd) {
       send(ws, {
         type: "server/error",
         error: "Invalid workspace path. It must stay inside allowed roots."
@@ -1517,7 +1521,11 @@ wss.on("connection", (ws) => {
     }
 
     const runId = randomId("run");
-    const args = buildCodexArgs(prompt, cwd, mode);
+    const mode = canResumeMirror ? "resume" : requestedMode;
+    const args = canResumeMirror
+      ? buildCodexResumeArgs(chat.mirror.sessionId, prompt)
+      : buildCodexArgs(prompt, cwd, requestedMode);
+    const commandText = [CODEX_BIN, ...args].join(" ");
 
     chat.cwd = cwd;
     chat.mode = mode;
@@ -1536,7 +1544,7 @@ wss.on("connection", (ws) => {
       mode,
       cwd,
       prompt,
-      command: [CODEX_BIN, ...args].join(" "),
+      command: commandText,
       exitCode: null,
       signal: null,
       finalText: "",
@@ -1561,7 +1569,7 @@ wss.on("connection", (ws) => {
       type: "run/accepted",
       chatId,
       runId,
-      command: [CODEX_BIN, ...args].join(" "),
+      command: commandText,
       cwd,
       mode
     });

@@ -8,7 +8,7 @@ Mobile-first web app to run Codex on your Mac from a phone browser.
 - Live run status for all web-app chats
 - Per-chat logs, messages, and latest answer
 - Read-only VS Code chat mirror (best-effort import from local session files)
-- Read-only Codex session mirror from `~/.codex/sessions`
+- Codex session mirror from `~/.codex/sessions` with mobile continue support
 - Built-in file browser for allowed roots (including VS Code/Codex folders)
 - Optional token auth (`APP_TOKEN`)
 - Workspace safety guard via `ALLOWED_ROOTS`
@@ -20,10 +20,11 @@ This app fully supports chats that are created and run **inside this web app**.
 
 It now also mirrors:
 - VS Code chat session files as read-only chats (`source = vscode-mirror`)
-- Codex session files as read-only chats (`source = codex-session-mirror`)
+- Codex session files (`source = codex-session-mirror`)
 
 Mirror limits:
-- Mirror chats are not controllable from this app (`Run/Stop` disabled).
+- VS Code mirror chats are not controllable from this app (`Run/Stop` disabled).
+- Codex session mirror chats can be continued with new prompts (uses `codex exec resume`).
 - Import depends on what VS Code writes to local `chatSessions` files.
 - Some in-progress threads may lag or appear partial depending on VS Code storage format.
 

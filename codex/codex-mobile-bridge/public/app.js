@@ -82,7 +82,7 @@ function sourceLabel(chat) {
     return "VS Code mirror (read-only)";
   }
   if (chat.source === "codex-session-mirror") {
-    return "Codex session mirror (read-only)";
+    return "Codex session mirror (continuable)";
   }
   return "Web app (runnable)";
 }
@@ -98,6 +98,33 @@ function sourceKey(chat) {
     return "codex";
   }
   return "web";
+}
+
+function canContinueMirroredChat(chat) {
+  return Boolean(chat && chat.readOnly && sourceKey(chat) === "codex");
+}
+
+function canRunChat(chat) {
+  if (!chat) {
+    return false;
+  }
+  if (!chat.readOnly) {
+    return true;
+  }
+  return canContinueMirroredChat(chat);
+}
+
+function readOnlyHintText(chat) {
+  if (!chat || !chat.readOnly) {
+    return "";
+  }
+  if (sourceKey(chat) === "codex") {
+    return "This mirrored Codex chat can continue from mobile. Workspace and sandbox are inherited from the original session.";
+  }
+  if (sourceKey(chat) === "vscode") {
+    return "VS Code mirrored chats are view-only here.";
+  }
+  return "This chat is mirrored and read-only in this web app.";
 }
 
 function setStatus(text, online) {
@@ -196,21 +223,27 @@ function setActionState() {
   const hasSelection = Boolean(chat);
   const isRunning = chat && chat.status === "running";
   const isReadOnly = Boolean(chat && chat.readOnly);
-  const disableRunControls = !authed || !hasSelection || Boolean(isRunning) || isReadOnly;
+  const canContinueMirror = canContinueMirroredChat(chat);
+  const canRun = canRunChat(chat);
+  const disableRunControls = !authed || !hasSelection || Boolean(isRunning) || !canRun;
   runBtn.disabled = disableRunControls;
-  cancelBtn.disabled = !authed || !hasSelection || !isRunning || isReadOnly;
+  runBtn.textContent = canContinueMirror ? "Continue" : "Run";
+  cancelBtn.disabled = !authed || !hasSelection || !isRunning || !canRun;
   createChatBtn.disabled = !authed;
   refreshMirrorBtn.disabled = !authed;
   fileRootSelect.disabled = !authed || fileState.roots.length === 0;
   fileUpBtn.disabled = !authed;
   fileRefreshBtn.disabled = !authed;
 
-  const disableInputFields = !hasSelection || isReadOnly;
-  cwdInput.disabled = disableInputFields;
-  modeSelect.disabled = disableInputFields;
-  promptInput.disabled = disableInputFields;
+  const disableWorkspaceFields = !hasSelection || isReadOnly;
+  const disablePromptField = !hasSelection || (isReadOnly && !canContinueMirror);
+  cwdInput.disabled = disableWorkspaceFields;
+  modeSelect.disabled = disableWorkspaceFields;
+  promptInput.disabled = disablePromptField;
   if (!hasSelection) {
     promptInput.placeholder = "Select a chat first...";
+  } else if (isReadOnly && canContinueMirror) {
+    promptInput.placeholder = "Continue this mirrored Codex chat...";
   } else if (isReadOnly) {
     promptInput.placeholder = "Mirrored chat (read-only)";
   } else {
@@ -365,6 +398,9 @@ function renderMessages() {
     box.appendChild(body);
     messagesPanel.appendChild(box);
   });
+  requestAnimationFrame(() => {
+    messagesPanel.scrollTop = messagesPanel.scrollHeight;
+  });
 }
 
 function renderFinal() {
@@ -464,6 +500,7 @@ function selectChat(chatId, requestDetail) {
 
   selectedChatName.textContent = chat ? chat.title : "None";
   selectedChatSource.textContent = sourceLabel(chat);
+  readOnlyHint.textContent = readOnlyHintText(chat);
   readOnlyHint.classList.toggle("hidden", !chat || !chat.readOnly);
   if (chat) {
     if (chat.cwd) {
@@ -701,6 +738,7 @@ function handleServerMessage(data) {
     if (selectedChatId === data.chat.id) {
       selectedChatName.textContent = data.chat.title || "Untitled";
       selectedChatSource.textContent = sourceLabel(data.chat);
+      readOnlyHint.textContent = readOnlyHintText(data.chat);
       readOnlyHint.classList.toggle("hidden", !data.chat.readOnly);
       setActionState();
     }
@@ -718,6 +756,7 @@ function handleServerMessage(data) {
     if (selectedChatId === data.chat.id) {
       selectedChatName.textContent = data.chat.title || "Untitled";
       selectedChatSource.textContent = sourceLabel(data.chat);
+      readOnlyHint.textContent = readOnlyHintText(data.chat);
       readOnlyHint.classList.toggle("hidden", !data.chat.readOnly);
       if (data.chat.cwd) {
         cwdInput.value = data.chat.cwd;
@@ -865,7 +904,7 @@ runBtn.addEventListener("click", () => {
   }
 
   const selected = getChatSummary(selectedChatId);
-  if (selected && selected.readOnly) {
+  if (selected && !canRunChat(selected)) {
     addLogLine(selectedChatId, "this mirrored chat is read-only in the web app");
     return;
   }
@@ -891,8 +930,12 @@ runBtn.addEventListener("click", () => {
   if (summary) {
     summary.lastUserMessage = prompt;
     summary.status = "running";
-    summary.cwd = cwd;
-    summary.mode = mode;
+    if (!summary.readOnly) {
+      summary.cwd = cwd;
+      summary.mode = mode;
+    } else if (canContinueMirroredChat(summary)) {
+      summary.mode = "resume";
+    }
     summary.updatedAt = new Date().toISOString();
     chats.set(selectedChatId, summary);
   }
@@ -914,7 +957,7 @@ cancelBtn.addEventListener("click", () => {
     return;
   }
   const selected = getChatSummary(selectedChatId);
-  if (selected && selected.readOnly) {
+  if (selected && !canRunChat(selected)) {
     addLogLine(selectedChatId, "mirrored chats cannot be cancelled from this app");
     return;
   }
