@@ -14,11 +14,14 @@ const selectedChatName = document.getElementById("selectedChatName");
 const selectedChatSource = document.getElementById("selectedChatSource");
 const readOnlyHint = document.getElementById("readOnlyHint");
 const cloneToLocalBtn = document.getElementById("cloneToLocalBtn");
+const activateLiveBtn = document.getElementById("activateLiveBtn");
 const cwdInput = document.getElementById("cwdInput");
 const modeSelect = document.getElementById("modeSelect");
 const promptInput = document.getElementById("promptInput");
 const runBtn = document.getElementById("runBtn");
 const cancelBtn = document.getElementById("cancelBtn");
+const approvalPanel = document.getElementById("approvalPanel");
+const approvalList = document.getElementById("approvalList");
 const messagesPanel = document.getElementById("messagesPanel");
 const logPanel = document.getElementById("logPanel");
 const finalPanel = document.getElementById("finalPanel");
@@ -55,11 +58,15 @@ let ws;
 let requiresToken = false;
 let authed = false;
 let selectedChatId = null;
+let appServerEnabled = false;
+let appServerReady = false;
 
 const chats = new Map();
 const details = new Map();
 const streamCache = new Map();
+const approvalsByChat = new Map();
 const MIRROR_AUTO_REFRESH_MS = 5000;
+const DETAIL_AUTO_REFRESH_MS = 3500;
 const fileState = {
   roots: [],
   currentPath: "",
@@ -80,6 +87,9 @@ function sourceLabel(chat) {
   if (!chat) {
     return "-";
   }
+  if (chat.source === "app-server-thread") {
+    return "Codex live thread (full control)";
+  }
   if (chat.source === "vscode-mirror") {
     return "VS Code mirror (read-only)";
   }
@@ -93,6 +103,9 @@ function sourceKey(chat) {
   if (!chat) {
     return "web";
   }
+  if (chat.source === "app-server-thread") {
+    return "live";
+  }
   if (chat.source === "vscode-mirror") {
     return "vscode";
   }
@@ -104,6 +117,13 @@ function sourceKey(chat) {
 
 function canContinueMirroredChat(chat) {
   return Boolean(chat && chat.readOnly && sourceKey(chat) === "codex");
+}
+
+function linkedLiveChatId(chat) {
+  if (!chat || typeof chat.linkedLiveChatId !== "string") {
+    return "";
+  }
+  return chat.linkedLiveChatId;
 }
 
 function canRunChat(chat) {
@@ -119,6 +139,10 @@ function canRunChat(chat) {
 function readOnlyHintText(chat) {
   if (!chat || !chat.readOnly) {
     return "";
+  }
+  const liveTwin = linkedLiveChatId(chat);
+  if (liveTwin) {
+    return "Read-only mirror selected. A linked live thread is available: tap 'Open As Live Thread' to continue there.";
   }
   if (sourceKey(chat) === "codex") {
     return "This mirrored Codex chat can continue from mobile. Workspace and sandbox are inherited from the original session.";
@@ -225,15 +249,26 @@ function setActionState() {
   const hasSelection = Boolean(chat);
   const isRunning = chat && chat.status === "running";
   const isReadOnly = Boolean(chat && chat.readOnly);
+  const isMirrorSource = sourceKey(chat) === "vscode" || sourceKey(chat) === "codex";
+  const liveTwinId = linkedLiveChatId(chat);
+  const isLiveChat = sourceKey(chat) === "live";
+  const liveUnavailable = isLiveChat && !appServerReady;
   const canContinueMirror = canContinueMirroredChat(chat);
   const canRun = canRunChat(chat);
-  const disableRunControls = !authed || !hasSelection || Boolean(isRunning) || !canRun;
+  const disableRunControls = !authed || !hasSelection || Boolean(isRunning) || !canRun || liveUnavailable;
   runBtn.disabled = disableRunControls;
   runBtn.textContent = canContinueMirror ? "Continue" : "Run";
-  cancelBtn.disabled = !authed || !hasSelection || !isRunning || !canRun;
+  cancelBtn.disabled = !authed || !hasSelection || !isRunning || !canRun || liveUnavailable;
   cloneToLocalBtn.disabled = !authed || !hasSelection;
   cloneToLocalBtn.classList.toggle("hidden", !hasSelection || canRun || !isReadOnly);
-  createChatBtn.disabled = !authed;
+  activateLiveBtn.disabled =
+    !authed || !hasSelection || !isReadOnly || !isMirrorSource || !appServerEnabled || !appServerReady || Boolean(isRunning);
+  activateLiveBtn.classList.toggle(
+    "hidden",
+    !hasSelection || !isReadOnly || !isMirrorSource || !appServerEnabled
+  );
+  activateLiveBtn.textContent = liveTwinId ? "Open Linked Live Thread" : "Open As Live Thread";
+  createChatBtn.disabled = !authed || (appServerEnabled && !appServerReady);
   refreshMirrorBtn.disabled = !authed;
   fileRootSelect.disabled = !authed || fileState.roots.length === 0;
   fileUpBtn.disabled = !authed;
@@ -430,6 +465,91 @@ function renderFinal() {
   finalPanel.textContent = lastAssistant;
 }
 
+function normalizeApprovalList(raw) {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .map((entry) => ({
+      requestId: String(entry.requestId || ""),
+      method: entry.method || "approval",
+      createdAt: entry.createdAt || "",
+      params: entry.params || {}
+    }))
+    .filter((entry) => entry.requestId);
+}
+
+function approvalHint(approval) {
+  const method = approval.method || "";
+  const params = approval.params || {};
+  if (typeof params.reason === "string" && params.reason.trim()) {
+    return params.reason.trim();
+  }
+  if (typeof params.command === "string" && params.command.trim()) {
+    return params.command.trim();
+  }
+  return method;
+}
+
+function renderApprovals() {
+  const chat = getChatSummary(selectedChatId);
+  const src = sourceKey(chat);
+  const list = normalizeApprovalList(approvalsByChat.get(selectedChatId) || []);
+
+  const show = Boolean(chat && src === "live" && list.length > 0);
+  approvalPanel.classList.toggle("hidden", !show);
+  approvalList.innerHTML = "";
+  if (!show) {
+    return;
+  }
+
+  list.forEach((approval) => {
+    const box = document.createElement("article");
+    box.className = "approval-item";
+
+    const text = document.createElement("p");
+    text.className = "approval-text";
+    text.textContent = approvalHint(approval);
+    box.appendChild(text);
+
+    const actions = document.createElement("div");
+    actions.className = "approval-actions";
+
+    const approveBtn = document.createElement("button");
+    approveBtn.type = "button";
+    approveBtn.className = "btn secondary";
+    approveBtn.textContent = "Approve";
+    approveBtn.addEventListener("click", () => {
+      send({ type: "approval/respond", requestId: approval.requestId, action: "approve" });
+      addLogLine(selectedChatId, `approval sent: approve (${approval.requestId})`);
+    });
+
+    const approveSessionBtn = document.createElement("button");
+    approveSessionBtn.type = "button";
+    approveSessionBtn.className = "btn secondary";
+    approveSessionBtn.textContent = "Approve Session";
+    approveSessionBtn.addEventListener("click", () => {
+      send({ type: "approval/respond", requestId: approval.requestId, action: "approve_session" });
+      addLogLine(selectedChatId, `approval sent: approve_session (${approval.requestId})`);
+    });
+
+    const denyBtn = document.createElement("button");
+    denyBtn.type = "button";
+    denyBtn.className = "btn ghost";
+    denyBtn.textContent = "Deny";
+    denyBtn.addEventListener("click", () => {
+      send({ type: "approval/respond", requestId: approval.requestId, action: "deny" });
+      addLogLine(selectedChatId, `approval sent: deny (${approval.requestId})`);
+    });
+
+    actions.appendChild(approveBtn);
+    actions.appendChild(approveSessionBtn);
+    actions.appendChild(denyBtn);
+    box.appendChild(actions);
+    approvalList.appendChild(box);
+  });
+}
+
 function setFileRoots(roots) {
   fileState.roots = Array.isArray(roots) ? roots.slice() : [];
   fileRootSelect.innerHTML = "";
@@ -518,6 +638,7 @@ function selectChat(chatId, requestDetail) {
   renderLogs();
   renderFinal();
   setActionState();
+  renderApprovals();
 
   if (requestDetail && chatId) {
     send({ type: "get_chat", chatId });
@@ -525,6 +646,7 @@ function selectChat(chatId, requestDetail) {
 }
 
 function applyDetail(detail) {
+  approvalsByChat.set(detail.id, normalizeApprovalList(detail.approvals || []));
   details.set(detail.id, {
     ...detail,
     logs: Array.isArray(detail.logs) ? detail.logs.slice() : [],
@@ -614,8 +736,11 @@ function handleServerMessage(data) {
   if (data.type === "hello") {
     requiresToken = Boolean(data.requiresToken);
     authed = !requiresToken;
+    appServerEnabled = Boolean(data.appServer && data.appServer.enabled);
+    appServerReady = Boolean(data.appServer && data.appServer.ready);
     showTokenCard(requiresToken);
-    setStatus(requiresToken ? "Connected (token required)" : "Connected", true);
+    const liveState = appServerEnabled ? (appServerReady ? "live-on" : "live-starting") : "live-off";
+    setStatus(requiresToken ? `Connected (token required, ${liveState})` : `Connected (${liveState})`, true);
     setFileRoots(data.browseRoots || []);
     if (authed && (data.browseRoots || []).length > 0) {
       fileRootSelect.value = data.browseRoots[0];
@@ -628,7 +753,7 @@ function handleServerMessage(data) {
   if (data.type === "auth/ok") {
     authed = true;
     showTokenCard(false);
-    setStatus("Authenticated", true);
+    setStatus(appServerEnabled ? (appServerReady ? "Authenticated (live-on)" : "Authenticated (live-starting)") : "Authenticated", true);
     if (fileRootSelect.value) {
       requestFileList(fileRootSelect.value);
     }
@@ -642,6 +767,16 @@ function handleServerMessage(data) {
     setStatus("Auth failed", true);
     filePreview.textContent = "Authenticate to use file browser.";
     addLogLine(selectedChatId || "global", `Auth error: ${data.error || "unknown"}`);
+    setActionState();
+    return;
+  }
+
+  if (data.type === "appserver/status") {
+    appServerEnabled = Boolean(data.enabled);
+    appServerReady = Boolean(data.ready);
+    if (authed) {
+      setStatus(appServerEnabled ? (appServerReady ? "Authenticated (live-on)" : "Authenticated (live-starting)") : "Authenticated", true);
+    }
     setActionState();
     return;
   }
@@ -695,13 +830,60 @@ function handleServerMessage(data) {
     return;
   }
 
+  if (data.type === "approval/request") {
+    const chatId = data.chatId;
+    if (!chatId || !data.approval) {
+      return;
+    }
+    const list = normalizeApprovalList(approvalsByChat.get(chatId) || []);
+    list.push({
+      requestId: String(data.approval.requestId || ""),
+      method: data.approval.method || "approval",
+      createdAt: data.approval.createdAt || new Date().toISOString(),
+      params: data.approval.params || {}
+    });
+    approvalsByChat.set(chatId, list);
+    if (selectedChatId === chatId) {
+      addLogLine(chatId, `approval requested: ${data.approval.method || "approval"}`);
+      renderApprovals();
+    }
+    return;
+  }
+
+  if (data.type === "approval/resolved") {
+    const chatId = data.chatId;
+    const requestId = String(data.requestId || "");
+    if (!chatId || !requestId) {
+      return;
+    }
+    const list = normalizeApprovalList(approvalsByChat.get(chatId) || []);
+    approvalsByChat.set(
+      chatId,
+      list.filter((entry) => entry.requestId !== requestId)
+    );
+    if (selectedChatId === chatId) {
+      renderApprovals();
+    }
+    return;
+  }
+
+  if (data.type === "approval/ack") {
+    if (selectedChatId) {
+      addLogLine(selectedChatId, `approval ack: ${data.action || "sent"} (${data.requestId || "?"})`);
+    }
+    return;
+  }
+
   if (data.type === "chats/snapshot") {
+    const previousApprovals = new Map(approvalsByChat);
     chats.clear();
+    approvalsByChat.clear();
 
     const list = Array.isArray(data.chats) ? data.chats : [];
     list.forEach((chat) => {
       mergeSummary(chat);
       ensureChatDetail(chat.id);
+      approvalsByChat.set(chat.id, normalizeApprovalList(previousApprovals.get(chat.id) || []));
     });
 
     renderChatList();
@@ -724,6 +906,7 @@ function handleServerMessage(data) {
     }
     mergeSummary(data.chat);
     ensureChatDetail(data.chat.id);
+    approvalsByChat.set(data.chat.id, approvalsByChat.get(data.chat.id) || []);
     renderChatList();
 
     if (!selectedChatId) {
@@ -735,6 +918,15 @@ function handleServerMessage(data) {
   if (data.type === "chat/cloned") {
     if (data.chatId) {
       selectChat(data.chatId, true);
+    }
+    return;
+  }
+
+  if (data.type === "chat/activated_live") {
+    const nextChatId = typeof data.chatId === "string" ? data.chatId : "";
+    if (nextChatId) {
+      addLogLine(nextChatId, "live thread activated");
+      selectChat(nextChatId, true);
     }
     return;
   }
@@ -752,6 +944,7 @@ function handleServerMessage(data) {
       readOnlyHint.textContent = readOnlyHintText(data.chat);
       readOnlyHint.classList.toggle("hidden", !data.chat.readOnly);
       setActionState();
+      renderApprovals();
     }
     return;
   }
@@ -777,6 +970,7 @@ function handleServerMessage(data) {
       renderLogs();
       renderFinal();
       setActionState();
+      renderApprovals();
     }
     return;
   }
@@ -916,6 +1110,20 @@ runBtn.addEventListener("click", () => {
 
   const selected = getChatSummary(selectedChatId);
   if (selected && !canRunChat(selected)) {
+    const linked = linkedLiveChatId(selected);
+    const key = sourceKey(selected);
+    if (linked) {
+      selectChat(linked, true);
+      return;
+    }
+    if ((key === "vscode" || key === "codex") && appServerEnabled && appServerReady) {
+      send({
+        type: "activate_live_chat",
+        sourceChatId: selected.id
+      });
+      addLogLine(selectedChatId, "activating live thread...");
+      return;
+    }
     addLogLine(selectedChatId, "this mirrored chat is read-only in the web app");
     return;
   }
@@ -984,10 +1192,19 @@ createChatBtn.addEventListener("click", () => {
   if (!authed) {
     return;
   }
-  send({
-    type: "create_chat",
-    title: chatTitleInput.value.trim()
-  });
+  const payload =
+    appServerEnabled
+      ? {
+          type: "create_live_chat",
+          title: chatTitleInput.value.trim(),
+          cwd: cwdInput.value.trim(),
+          mode: modeSelect.value
+        }
+      : {
+          type: "create_chat",
+          title: chatTitleInput.value.trim()
+        };
+  send(payload);
   chatTitleInput.value = "";
 });
 
@@ -1002,6 +1219,16 @@ cloneToLocalBtn.addEventListener("click", () => {
   send({
     type: "clone_chat",
     sourceChatId: selected.id
+  });
+});
+
+activateLiveBtn.addEventListener("click", () => {
+  if (!authed || !selectedChatId) {
+    return;
+  }
+  send({
+    type: "activate_live_chat",
+    sourceChatId: selectedChatId
   });
 });
 
@@ -1070,3 +1297,9 @@ setInterval(() => {
   }
   send({ type: "refresh_mirror" });
 }, MIRROR_AUTO_REFRESH_MS);
+setInterval(() => {
+  if (!authed || !selectedChatId || !ws || ws.readyState !== 1) {
+    return;
+  }
+  send({ type: "get_chat", chatId: selectedChatId });
+}, DETAIL_AUTO_REFRESH_MS);

@@ -48,6 +48,10 @@ const CODEX_SESSION_ROOTS = [
 const CODEX_SESSION_INDEX_PATH = path.join(os.homedir(), ".codex/session_index.jsonl");
 const BROWSE_MAX_ENTRIES = Math.max(Number(process.env.BROWSE_MAX_ENTRIES || 400), 40);
 const BROWSE_MAX_FILE_BYTES = Math.max(Number(process.env.BROWSE_MAX_FILE_BYTES || 160000), 8000);
+const APP_SERVER_ENABLED = process.env.APP_SERVER_ENABLED !== "0";
+const APP_SERVER_SYNC_MS = Math.max(Number(process.env.APP_SERVER_SYNC_MS || 5000), 1500);
+const APP_SERVER_THREAD_LIMIT = Math.max(Number(process.env.APP_SERVER_THREAD_LIMIT || 200), 20);
+const APP_SERVER_REQUEST_TIMEOUT_MS = Math.max(Number(process.env.APP_SERVER_REQUEST_TIMEOUT_MS || 25000), 3000);
 
 function dedupePaths(paths) {
   const uniq = [];
@@ -253,10 +257,12 @@ function lastMessageByRole(chat, role) {
 }
 
 function toChatSummary(chat) {
+  const linkedLiveChatId = findLinkedLiveChatId(chat);
   return {
     id: chat.id,
     source: chat.source || "local",
     readOnly: Boolean(chat.readOnly),
+    linkedLiveChatId,
     title: chat.title,
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
@@ -273,22 +279,39 @@ function toChatSummary(chat) {
 }
 
 function toChatDetail(chat) {
+  const approvals = getChatApprovals(chat);
   return {
     ...toChatSummary(chat),
     logs: chat.logs,
     messages: chat.messages,
     runs: chat.runs,
-    mirror: chat.mirror || null
+    mirror: chat.mirror || null,
+    approvals
   };
 }
 
 const chats = new Map();
 const mirroredChats = new Map();
+const appServerChats = new Map();
 const runtimes = new Map();
 const clients = new Map();
 const codexSessionFileCache = new Map();
 let persistTimer = null;
 let mirrorScanTimer = null;
+const appServerState = {
+  child: null,
+  stdoutBuffer: "",
+  pending: new Map(),
+  pendingApprovals: new Map(),
+  activeTurnByThread: new Map(),
+  runningTurnByThread: new Map(),
+  nextId: 1,
+  ready: false,
+  syncing: false,
+  initialized: false,
+  restartTimer: null,
+  syncTimer: null
+};
 
 function getRuntime(chatId) {
   if (!runtimes.has(chatId)) {
@@ -304,7 +327,7 @@ function getRuntime(chatId) {
 }
 
 function getAnyChat(chatId) {
-  return chats.get(chatId) || mirroredChats.get(chatId) || null;
+  return chats.get(chatId) || mirroredChats.get(chatId) || appServerChats.get(chatId) || null;
 }
 
 function canResumeCodexMirror(chat) {
@@ -318,8 +341,106 @@ function canResumeCodexMirror(chat) {
   );
 }
 
+function appChatIdForThread(threadId) {
+  return `as:${threadId}`;
+}
+
+function appThreadIdFromChatId(chatId) {
+  if (typeof chatId !== "string" || !chatId.startsWith("as:")) {
+    return "";
+  }
+  return chatId.slice(3);
+}
+
+function isAppServerChat(chat) {
+  return Boolean(chat && chat.source === "app-server-thread" && chat.appThread && chat.appThread.threadId);
+}
+
+function extractThreadIdCandidate(rawValue) {
+  if (typeof rawValue !== "string" || !rawValue.trim()) {
+    return "";
+  }
+  const m = rawValue.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  return m ? m[0] : "";
+}
+
+function findAppChatIdByPath(targetPath) {
+  if (typeof targetPath !== "string" || !targetPath) {
+    return "";
+  }
+  const resolvedTarget = path.resolve(targetPath);
+  for (const chat of appServerChats.values()) {
+    if (!isAppServerChat(chat) || !chat.appThread || typeof chat.appThread.path !== "string" || !chat.appThread.path) {
+      continue;
+    }
+    if (path.resolve(chat.appThread.path) === resolvedTarget) {
+      return chat.id;
+    }
+  }
+  return "";
+}
+
+function mirrorThreadId(chat) {
+  if (!chat || !chat.readOnly || !chat.mirror || typeof chat.mirror !== "object") {
+    return "";
+  }
+
+  const direct = extractThreadIdCandidate(chat.mirror.sessionId);
+  if (direct) {
+    return direct;
+  }
+
+  const fromPath = extractThreadIdCandidate(chat.mirror.path);
+  if (fromPath) {
+    return fromPath;
+  }
+
+  const fromId = extractThreadIdCandidate(chat.id);
+  if (fromId) {
+    return fromId;
+  }
+
+  return "";
+}
+
+function findLinkedLiveChatId(chat) {
+  if (!chat || isAppServerChat(chat)) {
+    return "";
+  }
+
+  const threadId = mirrorThreadId(chat);
+  if (threadId) {
+    const appChatId = appChatIdForThread(threadId);
+    if (appServerChats.has(appChatId)) {
+      return appChatId;
+    }
+  }
+
+  if (chat.mirror && typeof chat.mirror.path === "string" && chat.mirror.path) {
+    return findAppChatIdByPath(chat.mirror.path);
+  }
+
+  return "";
+}
+
+function getChatApprovals(chat) {
+  if (!isAppServerChat(chat)) {
+    return [];
+  }
+  const threadId = chat.appThread.threadId;
+  const list = appServerState.pendingApprovals.get(threadId) || [];
+  return list
+    .map((req) => ({
+      requestId: req.requestId,
+      method: req.method,
+      createdAt: req.createdAt,
+      params: req.params
+    }))
+    .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+}
+
 function listChatsSorted() {
-  return [...Array.from(chats.values()), ...Array.from(mirroredChats.values())]
+  return [...Array.from(chats.values()), ...Array.from(mirroredChats.values()), ...Array.from(appServerChats.values())]
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
     .map((chat) => toChatSummary(chat));
 }
@@ -1267,6 +1388,1015 @@ function syncMirrorsAndBroadcast(force = false) {
   return changed;
 }
 
+function sessionSourceToLabel(source) {
+  if (typeof source === "string") {
+    return source;
+  }
+  if (!source || typeof source !== "object") {
+    return "unknown";
+  }
+  if (typeof source.custom === "string" && source.custom) {
+    return source.custom;
+  }
+  if (source.subAgent) {
+    return "subAgent";
+  }
+  return "unknown";
+}
+
+function threadStatusToChatStatus(status) {
+  const kind = status && typeof status === "object" ? status.type : "";
+  if (kind === "active") {
+    return "running";
+  }
+  if (kind === "systemError") {
+    return "failed";
+  }
+  return "idle";
+}
+
+function turnStatusToRunStatus(turnStatus) {
+  if (turnStatus === "inProgress") {
+    return "running";
+  }
+  if (turnStatus === "failed") {
+    return "failed";
+  }
+  if (turnStatus === "interrupted") {
+    return "failed";
+  }
+  return "completed";
+}
+
+function extractUserInputText(items) {
+  if (!Array.isArray(items)) {
+    return "";
+  }
+  const parts = [];
+  for (const item of items) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    if (item.type === "text" && typeof item.text === "string" && item.text.trim()) {
+      parts.push(item.text.trim());
+    }
+  }
+  return parts.join("\n\n").trim();
+}
+
+function threadTitle(thread) {
+  if (thread && typeof thread.name === "string" && thread.name.trim()) {
+    return thread.name.trim().slice(0, 96);
+  }
+  if (thread && typeof thread.preview === "string" && thread.preview.trim()) {
+    return thread.preview.trim().slice(0, 96);
+  }
+  const id = thread && typeof thread.id === "string" ? thread.id : randomId("thread");
+  return `Thread ${id.slice(0, 8)}`;
+}
+
+function appChatSignature(chat) {
+  return [
+    chat.id,
+    chat.updatedAt,
+    chat.status,
+    chat.appThread && chat.appThread.statusType ? chat.appThread.statusType : "",
+    chat.currentRunId || "",
+    chat.title,
+    chat.lastError || "",
+    chat.cwd || "",
+    chat.messageCount || chat.messages.length
+  ].join("|");
+}
+
+function buildAppServerChatFromThread(thread, existingChat) {
+  const chatId = appChatIdForThread(thread.id);
+  const sourceLabel = sessionSourceToLabel(thread.source);
+  const status = threadStatusToChatStatus(thread.status);
+  const chat = existingChat
+    ? {
+        ...existingChat
+      }
+    : {
+        id: chatId,
+        source: "app-server-thread",
+        readOnly: false,
+        title: threadTitle(thread),
+        createdAt: toIsoFromAny(thread.createdAt, Date.now()),
+        updatedAt: toIsoFromAny(thread.updatedAt, Date.now()),
+        status: "idle",
+        currentRunId: null,
+        lastError: "",
+        cwd: thread.cwd || DEFAULT_CWD,
+        mode: "workspace-write",
+        logs: [],
+        messages: [],
+        runs: []
+      };
+
+  chat.source = "app-server-thread";
+  chat.readOnly = false;
+  chat.title = threadTitle(thread);
+  chat.createdAt = toIsoFromAny(thread.createdAt, Date.now());
+  chat.updatedAt = toIsoFromAny(thread.updatedAt, Date.now());
+  chat.status = status;
+  chat.currentRunId = appServerState.runningTurnByThread.get(thread.id) || null;
+  chat.cwd = thread.cwd || chat.cwd || DEFAULT_CWD;
+  chat.mode = chat.mode || "workspace-write";
+  chat.appThread = {
+    threadId: thread.id,
+    source: sourceLabel,
+    path: typeof thread.path === "string" ? thread.path : null,
+    statusType: thread && thread.status && typeof thread.status.type === "string" ? thread.status.type : "unknown"
+  };
+  return chat;
+}
+
+function replaceAppServerChats(nextMap) {
+  let changed = appServerChats.size !== nextMap.size;
+  if (!changed) {
+    for (const [id, nextChat] of nextMap.entries()) {
+      const prevChat = appServerChats.get(id);
+      if (!prevChat || appChatSignature(prevChat) !== appChatSignature(nextChat)) {
+        changed = true;
+        break;
+      }
+    }
+  }
+  if (!changed) {
+    return false;
+  }
+
+  appServerChats.clear();
+  for (const [id, chat] of nextMap.entries()) {
+    appServerChats.set(id, chat);
+  }
+  return true;
+}
+
+function findRunForTurn(chat, turnId) {
+  for (let i = chat.runs.length - 1; i >= 0; i -= 1) {
+    if (chat.runs[i].id === turnId) {
+      return chat.runs[i];
+    }
+  }
+  return null;
+}
+
+function appendMessageDedup(chat, role, text, runId, createdAtOverride) {
+  if (!text || typeof text !== "string") {
+    return;
+  }
+  const normalized = text.trim();
+  if (!normalized) {
+    return;
+  }
+  const last = chat.messages[chat.messages.length - 1];
+  if (last && last.role === role && last.text === normalized && last.runId === (runId || null)) {
+    return;
+  }
+  chat.messages.push({
+    id: randomId("msg"),
+    role,
+    text: normalized,
+    runId: runId || null,
+    createdAt: createdAtOverride || nowIso()
+  });
+  trimArray(chat.messages, MAX_MESSAGES_PER_CHAT);
+}
+
+function hydrateChatFromThreadRead(chat, thread) {
+  chat.logs = [];
+  chat.messages = [];
+  chat.runs = [];
+
+  if (!thread || !Array.isArray(thread.turns)) {
+    return;
+  }
+
+  for (const turn of thread.turns) {
+    const run = {
+      id: turn.id || randomId("turn"),
+      createdAt: toIsoFromAny(turn.startedAt, Date.now()),
+      completedAt: turn.completedAt ? toIsoFromAny(turn.completedAt, Date.now()) : null,
+      status: turnStatusToRunStatus(turn.status),
+      mode: chat.mode || "workspace-write",
+      cwd: chat.cwd || DEFAULT_CWD,
+      prompt: "",
+      command: "codex app-server turn/start",
+      exitCode: null,
+      signal: null,
+      finalText: "",
+      error: turn && turn.error && typeof turn.error.message === "string" ? turn.error.message : ""
+    };
+
+    for (const item of Array.isArray(turn.items) ? turn.items : []) {
+      if (!item || typeof item !== "object") {
+        continue;
+      }
+
+      if (item.type === "userMessage") {
+        const userText = extractUserInputText(item.content);
+        if (userText) {
+          appendMessageDedup(chat, "user", userText, run.id, run.createdAt);
+          if (!run.prompt) {
+            run.prompt = userText;
+          }
+        }
+        continue;
+      }
+
+      if (item.type === "agentMessage") {
+        if (typeof item.text === "string" && item.text.trim()) {
+          appendMessageDedup(chat, "assistant", item.text, run.id, run.completedAt || run.createdAt);
+          run.finalText = item.text.trim();
+        }
+        continue;
+      }
+
+      if (item.type === "commandExecution") {
+        if (typeof item.command === "string" && item.command.trim()) {
+          addLogLine(chat, `cmd: ${item.command.trim()}`);
+        }
+        if (typeof item.aggregatedOutput === "string" && item.aggregatedOutput.trim()) {
+          const snippet = item.aggregatedOutput.trim().split("\n").slice(0, 6).join("\n");
+          addLogLine(chat, `output:\n${snippet}`);
+        }
+        continue;
+      }
+
+      if (item.type === "fileChange") {
+        addLogLine(chat, `fileChange: ${item.status || "updated"}`);
+      }
+    }
+
+    chat.runs.push(run);
+    trimArray(chat.runs, MAX_RUNS_PER_CHAT);
+  }
+
+  trimArray(chat.logs, MAX_LOG_LINES);
+}
+
+function appServerWrite(payload) {
+  if (!appServerState.child || !appServerState.child.stdin || appServerState.child.killed) {
+    throw new Error("App-server is not running.");
+  }
+  appServerState.child.stdin.write(`${JSON.stringify(payload)}\n`);
+}
+
+function appServerRequest(method, params, timeoutMs = APP_SERVER_REQUEST_TIMEOUT_MS) {
+  if (!appServerState.child) {
+    return Promise.reject(new Error("App-server is not available."));
+  }
+
+  const id = appServerState.nextId++;
+  const payload = {
+    jsonrpc: "2.0",
+    id,
+    method,
+    params
+  };
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      appServerState.pending.delete(id);
+      reject(new Error(`App-server request timeout: ${method}`));
+    }, timeoutMs);
+
+    appServerState.pending.set(id, { resolve, reject, timer, method });
+    try {
+      appServerWrite(payload);
+    } catch (err) {
+      clearTimeout(timer);
+      appServerState.pending.delete(id);
+      reject(err);
+    }
+  });
+}
+
+function appServerNotify(method, params = undefined) {
+  if (!appServerState.child) {
+    return;
+  }
+  const payload = {
+    jsonrpc: "2.0",
+    method
+  };
+  if (params !== undefined) {
+    payload.params = params;
+  }
+  try {
+    appServerWrite(payload);
+  } catch (err) {
+    console.error("[app-server] notify failed:", err.message);
+  }
+}
+
+function removePendingApproval(threadId, requestId) {
+  const list = appServerState.pendingApprovals.get(threadId) || [];
+  const next = list.filter((req) => String(req.requestId) !== String(requestId));
+  if (next.length > 0) {
+    appServerState.pendingApprovals.set(threadId, next);
+  } else {
+    appServerState.pendingApprovals.delete(threadId);
+  }
+
+  const chatId = appChatIdForThread(threadId);
+  const chat = appServerChats.get(chatId);
+  if (chat) {
+    chat.updatedAt = nowIso();
+    broadcastToAuthed({ type: "chat/updated", chat: toChatSummary(chat) });
+  }
+  broadcastToAuthed({ type: "approval/resolved", chatId, requestId: String(requestId) });
+}
+
+function registerPendingApproval(method, requestId, params) {
+  const threadId =
+    (params && typeof params.threadId === "string" && params.threadId) ||
+    (params && typeof params.conversationId === "string" && params.conversationId) ||
+    "";
+  if (!threadId) {
+    return;
+  }
+  const chatId = appChatIdForThread(threadId);
+  const existing = appServerState.pendingApprovals.get(threadId) || [];
+  const pending = {
+    method,
+    requestId: String(requestId),
+    createdAt: nowIso(),
+    params
+  };
+  existing.push(pending);
+  appServerState.pendingApprovals.set(threadId, existing);
+
+  broadcastToAuthed({
+    type: "approval/request",
+    chatId,
+    approval: {
+      requestId: pending.requestId,
+      method,
+      createdAt: pending.createdAt,
+      params
+    }
+  });
+
+  let chat = appServerChats.get(chatId);
+  if (!chat) {
+    chat = {
+      id: chatId,
+      source: "app-server-thread",
+      readOnly: false,
+      title: `Thread ${threadId.slice(0, 8)}`,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      status: "running",
+      currentRunId: appServerState.runningTurnByThread.get(threadId) || null,
+      lastError: "",
+      cwd: DEFAULT_CWD,
+      mode: "workspace-write",
+      logs: [],
+      messages: [],
+      runs: [],
+      appThread: {
+        threadId,
+        source: "unknown",
+        path: null
+      }
+    };
+    appServerChats.set(chatId, chat);
+    broadcastToAuthed({ type: "chats/snapshot", chats: listChatsSorted() });
+  }
+
+  if (chat) {
+    chat.status = "running";
+    chat.currentRunId = appServerState.runningTurnByThread.get(threadId) || chat.currentRunId || null;
+    chat.updatedAt = nowIso();
+    addLogLine(chat, `[approval] ${method}`);
+    broadcastToAuthed({ type: "chat/updated", chat: toChatSummary(chat) });
+  }
+}
+
+function handleAppServerServerRequest(message) {
+  registerPendingApproval(message.method, message.id, message.params || {});
+}
+
+function handleTurnStartedNotification(params) {
+  const threadId = params && typeof params.threadId === "string" ? params.threadId : "";
+  const turn = params ? params.turn : null;
+  if (!threadId || !turn || typeof turn !== "object") {
+    return;
+  }
+  appServerState.runningTurnByThread.set(threadId, turn.id);
+  appServerState.activeTurnByThread.set(threadId, turn.id);
+
+  const chatId = appChatIdForThread(threadId);
+  const chat = appServerChats.get(chatId);
+  if (!chat) {
+    return;
+  }
+
+  chat.status = "running";
+  chat.currentRunId = turn.id;
+  chat.updatedAt = nowIso();
+  if (!findRunForTurn(chat, turn.id)) {
+    appendRun(chat, {
+      id: turn.id,
+      createdAt: toIsoFromAny(turn.startedAt, Date.now()),
+      completedAt: null,
+      status: "running",
+      mode: chat.mode || "workspace-write",
+      cwd: chat.cwd || DEFAULT_CWD,
+      prompt: "",
+      command: "codex app-server turn/start",
+      exitCode: null,
+      signal: null,
+      finalText: "",
+      error: ""
+    });
+  }
+
+  broadcastToAuthed({ type: "chat/updated", chat: toChatSummary(chat) });
+  broadcastToAuthed({
+    type: "run/accepted",
+    chatId,
+    runId: turn.id,
+    command: "codex app-server turn/start",
+    cwd: chat.cwd || DEFAULT_CWD,
+    mode: chat.mode || "workspace-write"
+  });
+}
+
+function handleTurnCompletedNotification(params) {
+  const threadId = params && typeof params.threadId === "string" ? params.threadId : "";
+  const turn = params ? params.turn : null;
+  if (!threadId || !turn || typeof turn !== "object") {
+    return;
+  }
+
+  const chatId = appChatIdForThread(threadId);
+  const chat = appServerChats.get(chatId);
+  appServerState.runningTurnByThread.delete(threadId);
+  appServerState.activeTurnByThread.delete(threadId);
+
+  if (!chat) {
+    return;
+  }
+
+  const run = findRunForTurn(chat, turn.id);
+  const runStatus = turnStatusToRunStatus(turn.status);
+  const finalText = run ? run.finalText || "" : "";
+  const failed = runStatus === "failed";
+
+  if (run) {
+    run.status = runStatus;
+    run.completedAt = turn.completedAt ? toIsoFromAny(turn.completedAt, Date.now()) : nowIso();
+    if (turn && turn.error && typeof turn.error.message === "string") {
+      run.error = turn.error.message;
+    }
+  }
+
+  chat.status = failed ? "failed" : "idle";
+  chat.currentRunId = null;
+  chat.lastError = failed ? (run && run.error) || "Turn failed." : "";
+  chat.updatedAt = nowIso();
+
+  broadcastToAuthed({ type: "chat/updated", chat: toChatSummary(chat) });
+  broadcastToAuthed({
+    type: failed ? "run/failed" : "run/completed",
+    chatId,
+    runId: turn.id,
+    exitCode: failed ? 1 : 0,
+    signal: null,
+    finalText
+  });
+}
+
+function handleItemCompletedNotification(params) {
+  const threadId = params && typeof params.threadId === "string" ? params.threadId : "";
+  const turnId = params && typeof params.turnId === "string" ? params.turnId : "";
+  const item = params ? params.item : null;
+  if (!threadId || !item || typeof item !== "object") {
+    return;
+  }
+
+  const chatId = appChatIdForThread(threadId);
+  const chat = appServerChats.get(chatId);
+  if (!chat) {
+    return;
+  }
+
+  if (item.type === "userMessage") {
+    const text = extractUserInputText(item.content);
+    if (text) {
+      appendMessageDedup(chat, "user", text, turnId, nowIso());
+      const run = findRunForTurn(chat, turnId);
+      if (run && !run.prompt) {
+        run.prompt = text;
+      }
+    }
+  } else if (item.type === "agentMessage") {
+    if (typeof item.text === "string" && item.text.trim()) {
+      const text = item.text.trim();
+      appendMessageDedup(chat, "assistant", text, turnId, nowIso());
+      const run = findRunForTurn(chat, turnId);
+      if (run) {
+        run.finalText = text;
+      }
+      broadcastToAuthed({
+        type: "run/event",
+        chatId,
+        runId: turnId,
+        event: {
+          method: "item/completed",
+          params: {
+            item: {
+              type: "agentMessage",
+              text
+            }
+          }
+        }
+      });
+    }
+  }
+
+  chat.updatedAt = nowIso();
+  broadcastToAuthed({ type: "chat/updated", chat: toChatSummary(chat) });
+}
+
+function handleAppServerNotification(message) {
+  const method = message.method;
+  const params = message.params || {};
+
+  if (method === "thread/started" && params.thread && typeof params.thread === "object") {
+    const thread = params.thread;
+    const chatId = appChatIdForThread(thread.id);
+    const existing = appServerChats.get(chatId);
+    const chat = buildAppServerChatFromThread(thread, existing);
+    appServerChats.set(chatId, chat);
+    broadcastToAuthed({ type: "chats/snapshot", chats: listChatsSorted() });
+    return;
+  }
+
+  if (method === "thread/status/changed") {
+    const threadId = typeof params.threadId === "string" ? params.threadId : "";
+    if (!threadId) {
+      return;
+    }
+    const chat = appServerChats.get(appChatIdForThread(threadId));
+    if (!chat) {
+      return;
+    }
+    chat.status = threadStatusToChatStatus(params.status);
+    chat.updatedAt = nowIso();
+    broadcastToAuthed({ type: "chat/updated", chat: toChatSummary(chat) });
+    return;
+  }
+
+  if (method === "turn/started") {
+    handleTurnStartedNotification(params);
+    return;
+  }
+
+  if (method === "turn/completed") {
+    handleTurnCompletedNotification(params);
+    return;
+  }
+
+  if (method === "item/agentMessage/delta") {
+    const threadId = typeof params.threadId === "string" ? params.threadId : "";
+    const turnId = typeof params.turnId === "string" ? params.turnId : "";
+    if (!threadId || !turnId) {
+      return;
+    }
+    const chatId = appChatIdForThread(threadId);
+    const chat = appServerChats.get(chatId);
+    if (!chat) {
+      return;
+    }
+    chat.updatedAt = nowIso();
+    broadcastToAuthed({
+      type: "run/event",
+      chatId,
+      runId: turnId,
+      event: {
+        method,
+        params
+      }
+    });
+    return;
+  }
+
+  if (method === "item/completed") {
+    handleItemCompletedNotification(params);
+    return;
+  }
+
+  if (method === "item/commandExecution/outputDelta" || method === "item/fileChange/outputDelta") {
+    const threadId = typeof params.threadId === "string" ? params.threadId : "";
+    const turnId = typeof params.turnId === "string" ? params.turnId : "";
+    if (!threadId || !turnId) {
+      return;
+    }
+    const chatId = appChatIdForThread(threadId);
+    broadcastToAuthed({
+      type: "run/event",
+      chatId,
+      runId: turnId,
+      event: {
+        method,
+        params
+      }
+    });
+    return;
+  }
+}
+
+function handleAppServerResponse(message) {
+  const pending =
+    appServerState.pending.get(message.id) ||
+    (typeof message.id === "string" ? appServerState.pending.get(Number(message.id)) : null);
+  if (!pending) {
+    return;
+  }
+  clearTimeout(pending.timer);
+  appServerState.pending.delete(message.id);
+  if (typeof message.id === "string") {
+    appServerState.pending.delete(Number(message.id));
+  }
+  if (message.error) {
+    pending.reject(new Error(message.error.message || "App-server request failed."));
+    return;
+  }
+
+  pending.resolve(message.result);
+}
+
+function handleAppServerJsonLine(line) {
+  const message = safeJsonParse(line);
+  if (!message || typeof message !== "object") {
+    return;
+  }
+
+  if (message.id !== undefined && (message.result !== undefined || message.error !== undefined)) {
+    handleAppServerResponse(message);
+    return;
+  }
+
+  if (message.id !== undefined && typeof message.method === "string") {
+    handleAppServerServerRequest(message);
+    return;
+  }
+
+  if (typeof message.method === "string") {
+    handleAppServerNotification(message);
+  }
+}
+
+function clearAppServerPending(reasonText) {
+  for (const [id, pending] of appServerState.pending.entries()) {
+    clearTimeout(pending.timer);
+    pending.reject(new Error(reasonText || "App-server connection closed."));
+    appServerState.pending.delete(id);
+  }
+}
+
+function scheduleAppServerRestart() {
+  if (!APP_SERVER_ENABLED) {
+    return;
+  }
+  if (appServerState.restartTimer) {
+    return;
+  }
+  appServerState.restartTimer = setTimeout(() => {
+    appServerState.restartTimer = null;
+    startAppServerLoop();
+  }, 2200);
+}
+
+async function syncAppServerThreads(force = false) {
+  if (!APP_SERVER_ENABLED || !appServerState.ready || appServerState.syncing) {
+    return false;
+  }
+
+  appServerState.syncing = true;
+  try {
+    let cursor = null;
+    let pageCount = 0;
+    const collected = [];
+
+    while (pageCount < 8 && collected.length < APP_SERVER_THREAD_LIMIT) {
+      const params = {
+        limit: Math.min(80, APP_SERVER_THREAD_LIMIT),
+        sortKey: "updated_at",
+        sortDirection: "desc",
+        archived: false
+      };
+      if (cursor) {
+        params.cursor = cursor;
+      }
+
+      const result = await appServerRequest("thread/list", params, APP_SERVER_REQUEST_TIMEOUT_MS);
+      const data = result && Array.isArray(result.data) ? result.data : [];
+      for (const thread of data) {
+        collected.push(thread);
+        if (collected.length >= APP_SERVER_THREAD_LIMIT) {
+          break;
+        }
+      }
+      cursor = result && typeof result.nextCursor === "string" ? result.nextCursor : null;
+      pageCount += 1;
+      if (!cursor) {
+        break;
+      }
+    }
+
+    const nextMap = new Map();
+    for (const thread of collected) {
+      if (!thread || typeof thread !== "object" || typeof thread.id !== "string") {
+        continue;
+      }
+      const chatId = appChatIdForThread(thread.id);
+      const existing = appServerChats.get(chatId);
+      const chat = buildAppServerChatFromThread(thread, existing);
+      nextMap.set(chatId, chat);
+    }
+
+    const changed = replaceAppServerChats(nextMap);
+    if (force || changed) {
+      broadcastToAuthed({ type: "chats/snapshot", chats: listChatsSorted() });
+    }
+    return changed;
+  } catch (err) {
+    console.error("[app-server] thread sync failed:", err.message);
+    return false;
+  } finally {
+    appServerState.syncing = false;
+  }
+}
+
+async function refreshAppThreadDetail(chatId) {
+  const initial = appServerChats.get(chatId);
+  if (!initial || !isAppServerChat(initial) || !appServerState.ready) {
+    return null;
+  }
+  try {
+    const chat = await ensureAppThreadLoaded(initial);
+    const threadId = chat.appThread.threadId;
+    const result = await appServerRequest("thread/read", { threadId, includeTurns: true }, APP_SERVER_REQUEST_TIMEOUT_MS);
+    const thread = result && result.thread ? result.thread : null;
+    if (!thread) {
+      return chat;
+    }
+    const refreshed = buildAppServerChatFromThread(thread, chat);
+    hydrateChatFromThreadRead(refreshed, thread);
+    appServerChats.set(chatId, refreshed);
+    return refreshed;
+  } catch (err) {
+    addLogLine(initial, `[app-server] detail refresh failed: ${err.message}`);
+    return initial;
+  }
+}
+
+async function ensureAppThreadLoaded(chat) {
+  if (!chat || !isAppServerChat(chat) || !appServerState.ready) {
+    return chat;
+  }
+  if (!chat.appThread || chat.appThread.statusType !== "notLoaded") {
+    return chat;
+  }
+
+  const threadId = chat.appThread.threadId;
+  if (!threadId) {
+    return chat;
+  }
+
+  const params = {
+    threadId,
+    approvalPolicy: "on-request",
+    approvalsReviewer: "user",
+    persistExtendedHistory: true,
+    excludeTurns: false
+  };
+  if (chat.cwd) {
+    params.cwd = chat.cwd;
+  }
+
+  try {
+    const result = await appServerRequest("thread/resume", params, APP_SERVER_REQUEST_TIMEOUT_MS);
+    const resumedThread = result && result.thread ? result.thread : null;
+    if (!resumedThread) {
+      return chat;
+    }
+
+    const refreshed = buildAppServerChatFromThread(resumedThread, appServerChats.get(chat.id) || chat);
+    if (Array.isArray(resumedThread.turns) && resumedThread.turns.length > 0) {
+      hydrateChatFromThreadRead(refreshed, resumedThread);
+    }
+    appServerChats.set(refreshed.id, refreshed);
+    broadcastToAuthed({ type: "chat/updated", chat: toChatSummary(refreshed) });
+    return refreshed;
+  } catch (err) {
+    chat.appThread.statusType = "resumeFailed";
+    chat.lastError = err.message || "Failed to resume thread.";
+    chat.updatedAt = nowIso();
+    addLogLine(chat, `[app-server] resume failed: ${chat.lastError}`);
+    appServerChats.set(chat.id, chat);
+    broadcastToAuthed({ type: "chat/updated", chat: toChatSummary(chat) });
+    throw err;
+  }
+}
+
+async function startAppServerLoop() {
+  if (!APP_SERVER_ENABLED || appServerState.child) {
+    return;
+  }
+
+  const child = spawn(CODEX_BIN, ["app-server", "--listen", "stdio://"], {
+    cwd: DEFAULT_CWD,
+    env: process.env,
+    stdio: ["pipe", "pipe", "pipe"]
+  });
+  appServerState.child = child;
+  appServerState.stdoutBuffer = "";
+  appServerState.ready = false;
+  appServerState.initialized = false;
+  console.log("[app-server] started");
+
+  child.stdout.on("data", (chunk) => {
+    appServerState.stdoutBuffer += chunk.toString("utf8");
+    let nl;
+    while ((nl = appServerState.stdoutBuffer.indexOf("\n")) >= 0) {
+      const line = appServerState.stdoutBuffer.slice(0, nl).trim();
+      appServerState.stdoutBuffer = appServerState.stdoutBuffer.slice(nl + 1);
+      if (!line) {
+        continue;
+      }
+      handleAppServerJsonLine(line);
+    }
+  });
+
+  child.stderr.on("data", (chunk) => {
+    const lines = chunk
+      .toString("utf8")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    for (const line of lines) {
+      if (/^\d{4}-\d{2}-\d{2}T/.test(line)) {
+        continue;
+      }
+      console.log(`[app-server:stderr] ${line}`);
+    }
+  });
+
+  child.on("error", (err) => {
+    console.error("[app-server] process error:", err.message);
+  });
+
+  child.on("close", (code, signal) => {
+    console.log(`[app-server] closed (code=${String(code)} signal=${signal || "none"})`);
+    appServerState.ready = false;
+    appServerState.initialized = false;
+    appServerState.child = null;
+    if (appServerState.syncTimer) {
+      clearInterval(appServerState.syncTimer);
+      appServerState.syncTimer = null;
+    }
+    clearAppServerPending("App-server process closed.");
+    broadcastToAuthed({
+      type: "appserver/status",
+      enabled: APP_SERVER_ENABLED,
+      ready: false
+    });
+    scheduleAppServerRestart();
+  });
+
+  try {
+    await appServerRequest(
+      "initialize",
+      {
+        clientInfo: {
+          name: "codex_mobile_bridge",
+          title: "Codex Mobile Bridge",
+          version: "0.2.0"
+        },
+        capabilities: {
+          experimentalApi: true
+        }
+      },
+      12000
+    );
+    appServerNotify("initialized");
+    appServerState.ready = true;
+    appServerState.initialized = true;
+    broadcastToAuthed({
+      type: "appserver/status",
+      enabled: APP_SERVER_ENABLED,
+      ready: true
+    });
+    await syncAppServerThreads(true);
+    if (!appServerState.syncTimer) {
+      appServerState.syncTimer = setInterval(() => {
+        syncAppServerThreads(false);
+      }, APP_SERVER_SYNC_MS);
+    }
+  } catch (err) {
+    console.error("[app-server] init failed:", err.message);
+    clearAppServerPending("App-server initialization failed.");
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // noop
+    }
+  }
+}
+
+async function respondToAppServerApproval(requestId, action) {
+  const reqIdRaw = Number(requestId);
+  const reqId = Number.isFinite(reqIdRaw) ? reqIdRaw : requestId;
+
+  let match = null;
+  let threadId = "";
+  for (const [tid, list] of appServerState.pendingApprovals.entries()) {
+    for (const entry of list) {
+      if (String(entry.requestId) === String(requestId)) {
+        match = entry;
+        threadId = tid;
+        break;
+      }
+    }
+    if (match) {
+      break;
+    }
+  }
+  if (!match) {
+    throw new Error("Approval request not found.");
+  }
+
+  if (match.method === "item/commandExecution/requestApproval") {
+    const decision = action === "approve_session" ? "acceptForSession" : action === "approve" ? "accept" : "decline";
+    await appServerWrite({
+      jsonrpc: "2.0",
+      id: reqId,
+      result: {
+        decision
+      }
+    });
+    removePendingApproval(threadId, requestId);
+    return;
+  }
+
+  if (match.method === "item/fileChange/requestApproval") {
+    const decision = action === "approve_session" ? "acceptForSession" : action === "approve" ? "accept" : "decline";
+    await appServerWrite({
+      jsonrpc: "2.0",
+      id: reqId,
+      result: {
+        decision
+      }
+    });
+    removePendingApproval(threadId, requestId);
+    return;
+  }
+
+  if (match.method === "item/permissions/requestApproval") {
+    const requested = match.params && typeof match.params === "object" ? match.params.permissions : null;
+    const granted = action === "approve" || action === "approve_session" ? requested || {} : {};
+    await appServerWrite({
+      jsonrpc: "2.0",
+      id: reqId,
+      result: {
+        scope: action === "approve_session" ? "session" : "turn",
+        permissions: granted
+      }
+    });
+    removePendingApproval(threadId, requestId);
+    return;
+  }
+
+  if (match.method === "execCommandApproval" || match.method === "applyPatchApproval") {
+    const decision = action === "approve_session" ? "approved_for_session" : action === "approve" ? "approved" : "denied";
+    await appServerWrite({
+      jsonrpc: "2.0",
+      id: reqId,
+      result: {
+        decision
+      }
+    });
+    removePendingApproval(threadId, requestId);
+    return;
+  }
+
+  await appServerWrite({
+    jsonrpc: "2.0",
+    id: reqId,
+    result: {
+      decision: "decline"
+    }
+  });
+  removePendingApproval(threadId, requestId);
+}
+
 function listDirectoryEntries(targetPath) {
   const resolved = resolveBrowsePath(targetPath);
   if (!resolved) {
@@ -1370,6 +2500,7 @@ function startMirrorLoop() {
 
 restoreChats();
 startMirrorLoop();
+startAppServerLoop();
 
 const app = express();
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -1382,11 +2513,14 @@ app.get("/health", (_req, res) => {
     allowedRoots: ALLOWED_ROOTS,
     requiresToken: Boolean(APP_TOKEN),
     codexBin: CODEX_BIN,
-    chatCount: chats.size + mirroredChats.size,
+    chatCount: chats.size + mirroredChats.size + appServerChats.size,
     localChatCount: chats.size,
     mirroredChatCount: mirroredChats.size,
+    appServerChatCount: appServerChats.size,
     vscodeMirrorEnabled: VSCODE_MIRROR_ENABLED,
     codexSessionMirrorEnabled: CODEX_SESSION_MIRROR_ENABLED,
+    appServerEnabled: APP_SERVER_ENABLED,
+    appServerReady: appServerState.ready,
     vscodeMirrorScanMs: VSCODE_MIRROR_SCAN_MS,
     browseRoots: BROWSE_ROOTS
   });
@@ -1412,6 +2546,11 @@ wss.on("connection", (ws) => {
     mirror: {
       vscodeEnabled: VSCODE_MIRROR_ENABLED,
       codexSessionEnabled: CODEX_SESSION_MIRROR_ENABLED
+    },
+    appServer: {
+      enabled: APP_SERVER_ENABLED,
+      ready: appServerState.ready,
+      syncMs: APP_SERVER_SYNC_MS
     }
   });
 
@@ -1455,6 +2594,136 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    if (msg.type === "create_live_chat") {
+      if (!APP_SERVER_ENABLED || !appServerState.ready) {
+        send(ws, { type: "server/error", error: "App-server is not ready." });
+        return;
+      }
+      const requestedTitle = typeof msg.title === "string" ? msg.title.trim() : "";
+      const requestedCwd = resolveCwd(msg.cwd || DEFAULT_CWD) || DEFAULT_CWD;
+      const requestedMode = msg.mode === "read-only" ? "read-only" : "workspace-write";
+
+      appServerRequest("thread/start", {
+        cwd: requestedCwd,
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+        sandbox: requestedMode === "workspace-write" ? "workspace-write" : "read-only",
+        experimentalRawEvents: false,
+        persistExtendedHistory: true
+      })
+        .then(async (result) => {
+          const thread = result && result.thread;
+          if (!thread || typeof thread.id !== "string") {
+            send(ws, { type: "server/error", error: "Failed to create live chat." });
+            return;
+          }
+
+          if (requestedTitle) {
+            try {
+              await appServerRequest("thread/name/set", { threadId: thread.id, name: requestedTitle });
+              thread.name = requestedTitle;
+            } catch {
+              // keep default title if name update fails
+            }
+          }
+
+          const chatId = appChatIdForThread(thread.id);
+          const existing = appServerChats.get(chatId);
+          const chat = buildAppServerChatFromThread(thread, existing);
+          appServerChats.set(chatId, chat);
+          broadcastToAuthed({ type: "chat/created", chat: toChatSummary(chat) });
+          broadcastToAuthed({ type: "chats/snapshot", chats: listChatsSorted() });
+        })
+        .catch((err) => {
+          send(ws, { type: "server/error", error: `Live chat create failed: ${err.message}` });
+        });
+      return;
+    }
+
+    if (msg.type === "activate_live_chat") {
+      if (!APP_SERVER_ENABLED || !appServerState.ready) {
+        send(ws, { type: "server/error", error: "App-server is not ready." });
+        return;
+      }
+      const sourceChatId = typeof msg.sourceChatId === "string" ? msg.sourceChatId : "";
+      const sourceChat = getAnyChat(sourceChatId);
+      if (!sourceChat) {
+        send(ws, { type: "server/error", error: "Source chat not found." });
+        return;
+      }
+      if (isAppServerChat(sourceChat)) {
+        send(ws, {
+          type: "chat/activated_live",
+          sourceChatId,
+          chatId: sourceChat.id
+        });
+        return;
+      }
+      if (!sourceChat.readOnly) {
+        send(ws, { type: "server/error", error: "This chat is already editable." });
+        return;
+      }
+
+      const linkedLive = findLinkedLiveChatId(sourceChat);
+      if (linkedLive && appServerChats.has(linkedLive)) {
+        send(ws, {
+          type: "chat/activated_live",
+          sourceChatId,
+          chatId: linkedLive
+        });
+        return;
+      }
+
+      const threadId = mirrorThreadId(sourceChat);
+      if (!threadId) {
+        send(ws, {
+          type: "server/error",
+          error: "No resumable live thread id found for this mirrored chat."
+        });
+        return;
+      }
+
+      const resumeParams = {
+        threadId,
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+        persistExtendedHistory: true,
+        excludeTurns: false
+      };
+      const sourceCwd = resolveCwd(sourceChat.cwd || DEFAULT_CWD);
+      if (sourceCwd) {
+        resumeParams.cwd = sourceCwd;
+      }
+
+      appServerRequest("thread/resume", resumeParams, APP_SERVER_REQUEST_TIMEOUT_MS)
+        .then((result) => {
+          const thread = result && result.thread;
+          if (!thread || typeof thread.id !== "string") {
+            send(ws, { type: "server/error", error: "Failed to resume live thread." });
+            return;
+          }
+
+          const chatId = appChatIdForThread(thread.id);
+          const existing = appServerChats.get(chatId);
+          const chat = buildAppServerChatFromThread(thread, existing);
+          if (Array.isArray(thread.turns) && thread.turns.length > 0) {
+            hydrateChatFromThreadRead(chat, thread);
+          }
+          appServerChats.set(chatId, chat);
+
+          broadcastToAuthed({ type: "chats/snapshot", chats: listChatsSorted() });
+          send(ws, {
+            type: "chat/activated_live",
+            sourceChatId,
+            chatId
+          });
+        })
+        .catch((err) => {
+          send(ws, { type: "server/error", error: `Live activation failed: ${err.message}` });
+        });
+      return;
+    }
+
     if (msg.type === "clone_chat") {
       const sourceChatId = typeof msg.sourceChatId === "string" ? msg.sourceChatId : "";
       const sourceChat = getAnyChat(sourceChatId);
@@ -1470,7 +2739,16 @@ wss.on("connection", (ws) => {
 
     if (msg.type === "refresh_mirror") {
       syncMirrorsAndBroadcast(true);
-      send(ws, { type: "mirror/refreshed", count: mirroredChats.size });
+      syncAppServerThreads(true)
+        .then(() => {
+          send(ws, {
+            type: "mirror/refreshed",
+            count: mirroredChats.size + appServerChats.size
+          });
+        })
+        .catch((err) => {
+          send(ws, { type: "server/error", error: `Refresh failed: ${err.message}` });
+        });
       return;
     }
 
@@ -1494,6 +2772,23 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    if (msg.type === "approval/respond") {
+      const requestId = typeof msg.requestId === "string" || typeof msg.requestId === "number" ? msg.requestId : null;
+      const action = msg.action === "approve_session" ? "approve_session" : msg.action === "deny" ? "deny" : "approve";
+      if (requestId === null) {
+        send(ws, { type: "server/error", error: "Approval request id is missing." });
+        return;
+      }
+      respondToAppServerApproval(requestId, action)
+        .then(() => {
+          send(ws, { type: "approval/ack", requestId: String(requestId), action });
+        })
+        .catch((err) => {
+          send(ws, { type: "server/error", error: `Approval response failed: ${err.message}` });
+        });
+      return;
+    }
+
     if (msg.type === "get_chat") {
       const chatId = typeof msg.chatId === "string" ? msg.chatId : "";
       const chat = getAnyChat(chatId);
@@ -1501,6 +2796,17 @@ wss.on("connection", (ws) => {
         send(ws, { type: "server/error", error: "Chat not found." });
         return;
       }
+      if (isAppServerChat(chat)) {
+        refreshAppThreadDetail(chatId)
+          .then((fresh) => {
+            send(ws, { type: "chat/detail", chat: toChatDetail(fresh || chat) });
+          })
+          .catch((err) => {
+            send(ws, { type: "server/error", error: `Failed to read live chat: ${err.message}` });
+          });
+        return;
+      }
+
       send(ws, { type: "chat/detail", chat: toChatDetail(chat) });
       return;
     }
@@ -1512,6 +2818,26 @@ wss.on("connection", (ws) => {
         send(ws, { type: "server/error", error: "Chat not found." });
         return;
       }
+
+      if (isAppServerChat(chat)) {
+        const threadId = chat.appThread.threadId;
+        const turnId = appServerState.runningTurnByThread.get(threadId) || chat.currentRunId;
+        if (!turnId) {
+          send(ws, { type: "server/error", error: "No active live turn for this chat." });
+          return;
+        }
+        appServerRequest("turn/interrupt", { threadId, turnId })
+          .then(() => {
+            addLogLine(chat, "[app-server] interrupt requested");
+            chat.updatedAt = nowIso();
+            broadcastToAuthed({ type: "chat/updated", chat: toChatSummary(chat) });
+          })
+          .catch((err) => {
+            send(ws, { type: "server/error", error: `Interrupt failed: ${err.message}` });
+          });
+        return;
+      }
+
       const canResumeMirror = canResumeCodexMirror(chat);
       if (chat.readOnly && !canResumeMirror) {
         send(ws, { type: "server/error", error: "Mirrored chats are read-only in this app." });
@@ -1537,7 +2863,7 @@ wss.on("connection", (ws) => {
     }
 
     const chatId = typeof msg.chatId === "string" ? msg.chatId : "";
-    const chat = getAnyChat(chatId);
+    let chat = getAnyChat(chatId);
 
     if (!chat) {
       send(ws, { type: "server/error", error: "Chat not found." });
@@ -1547,6 +2873,105 @@ wss.on("connection", (ws) => {
     const canResumeMirror = canResumeCodexMirror(chat);
     if (chat.readOnly && !canResumeMirror) {
       send(ws, { type: "server/error", error: "Mirrored chats are read-only in this app." });
+      return;
+    }
+
+    if (isAppServerChat(chat)) {
+      const prompt = typeof msg.prompt === "string" ? msg.prompt.trim() : "";
+      if (!prompt) {
+        send(ws, { type: "server/error", error: "Prompt is empty." });
+        return;
+      }
+      if (!APP_SERVER_ENABLED || !appServerState.ready) {
+        send(ws, { type: "server/error", error: "App-server is not ready." });
+        return;
+      }
+
+      const requestedCwd = resolveCwd(msg.cwd || chat.cwd || DEFAULT_CWD);
+      if (msg.cwd && !requestedCwd) {
+        send(ws, {
+          type: "server/error",
+          error: "Invalid workspace path. It must stay inside allowed roots."
+        });
+        return;
+      }
+
+      ensureAppThreadLoaded(chat)
+        .then((loadedChat) => {
+          chat = loadedChat || chat;
+          const threadId = chat.appThread.threadId;
+          if (!threadId) {
+            throw new Error("Live thread id is missing.");
+          }
+
+          if (requestedCwd) {
+            chat.cwd = requestedCwd;
+          }
+
+          chat.status = "running";
+          chat.lastError = "";
+          chat.updatedAt = nowIso();
+          appendMessageDedup(chat, "user", prompt, null, nowIso());
+          broadcastToAuthed({ type: "chat/updated", chat: toChatSummary(chat) });
+
+          return appServerRequest("turn/start", {
+            threadId,
+            input: [{ type: "text", text: prompt, text_elements: [] }],
+            cwd: chat.cwd || DEFAULT_CWD,
+            approvalPolicy: "on-request",
+            approvalsReviewer: "user"
+          }).then((result) => ({ result, threadId }));
+        })
+        .then(({ result, threadId }) => {
+          const turn = result && result.turn ? result.turn : null;
+          const runId = turn && typeof turn.id === "string" ? turn.id : randomId("turn");
+          appServerState.runningTurnByThread.set(threadId, runId);
+          appServerState.activeTurnByThread.set(threadId, runId);
+          chat.currentRunId = runId;
+          chat.status = "running";
+          chat.updatedAt = nowIso();
+
+          if (!findRunForTurn(chat, runId)) {
+            appendRun(chat, {
+              id: runId,
+              createdAt: nowIso(),
+              completedAt: null,
+              status: "running",
+              mode: chat.mode || "workspace-write",
+              cwd: chat.cwd || DEFAULT_CWD,
+              prompt,
+              command: "codex app-server turn/start",
+              exitCode: null,
+              signal: null,
+              finalText: "",
+              error: ""
+            });
+          }
+
+          broadcastToAuthed({ type: "chat/updated", chat: toChatSummary(chat) });
+          broadcastToAuthed({
+            type: "run/accepted",
+            chatId,
+            runId,
+            command: "codex app-server turn/start",
+            cwd: chat.cwd || DEFAULT_CWD,
+            mode: chat.mode || "workspace-write"
+          });
+        })
+        .catch((err) => {
+          chat.status = "failed";
+          chat.currentRunId = null;
+          chat.lastError = err.message || "Live run failed.";
+          chat.updatedAt = nowIso();
+          addLogLine(chat, `[app-server] run failed: ${chat.lastError}`);
+          broadcastToAuthed({ type: "chat/updated", chat: toChatSummary(chat) });
+          broadcastToAuthed({
+            type: "run/error",
+            chatId,
+            runId: null,
+            error: chat.lastError
+          });
+        });
       return;
     }
 
@@ -1801,6 +3226,7 @@ server.listen(PORT, HOST, () => {
   console.log(`chat store: ${STORE_PATH}`);
   console.log(`vscode mirror: ${VSCODE_MIRROR_ENABLED ? "on" : "off"}`);
   console.log(`codex-session mirror: ${CODEX_SESSION_MIRROR_ENABLED ? "on" : "off"}`);
+  console.log(`app-server live threads: ${APP_SERVER_ENABLED ? "on" : "off"}`);
   console.log(`mirrored chats loaded: ${mirroredChats.size}`);
   if (VSCODE_MIRROR_ENABLED) {
     console.log(`vscode mirror roots: ${VSCODE_MIRROR_ROOTS.join(", ")}`);

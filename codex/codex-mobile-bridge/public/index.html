@@ -48,6 +48,7 @@
         <div class="row">
           <select id="chatSourceFilter">
             <option value="all">All Sources</option>
+            <option value="live">Live Threads</option>
             <option value="web">Web App</option>
             <option value="vscode">VS Code Mirror</option>
             <option value="codex">Codex Session Mirror</option>
@@ -71,6 +72,7 @@
         <p id="readOnlyHint" class="meta-line hidden">This chat is mirrored and read-only in this web app.</p>
         <div class="row">
           <button id="cloneToLocalBtn" class="btn secondary hidden" type="button">Copy To Editable Chat</button>
+          <button id="activateLiveBtn" class="btn secondary hidden" type="button">Open As Live Thread</button>
         </div>
 
         <label for="cwdInput">Workspace</label>
@@ -86,6 +88,11 @@
         <textarea id="promptInput" rows="7" placeholder="Ask Codex what to do..."></textarea>
 
         <div class="presets" id="presets"></div>
+
+        <div id="approvalPanel" class="approvals hidden">
+          <p class="meta-line"><strong>Pending Approvals</strong></p>
+          <div id="approvalList" class="approval-list"></div>
+        </div>
 
         <div class="row actions">
           <button id="runBtn" class="btn primary">Run</button>

@@ -5,6 +5,10 @@ Mobile-first web app to run Codex on your Mac from a phone browser.
 ## Features
 
 - Multi-chat workspace in the web app
+- Live Codex thread list from local app-server (`cli`, `vscode`, `exec`, `appServer`)
+- Continue any live thread with new prompts directly from mobile
+- One-tap "Open As Live Thread" from mirrored chats (resume by thread id/path when possible)
+- Handle command/file/permission approvals from mobile (`approve`, `approve session`, `deny`)
 - Live run status for all web-app chats
 - Per-chat logs, messages, and latest answer
 - Read-only VS Code chat mirror (best-effort import from local session files)
@@ -16,15 +20,19 @@ Mobile-first web app to run Codex on your Mac from a phone browser.
 
 ## Important Chat Scope
 
-This app fully supports chats that are created and run **inside this web app**.
+Primary mode is now **live app-server threads**:
+- these are full-control chats (`source = app-server-thread`)
+- they include existing Codex/VS Code sessions and new mobile-created sessions
+- approvals are handled directly in the mobile UI
 
-It now also mirrors:
+Additional mirror modes still exist:
 - VS Code chat session files as read-only chats (`source = vscode-mirror`)
 - Codex session files (`source = codex-session-mirror`)
 
 Mirror limits:
 - VS Code mirror chats are not controllable from this app (`Run/Stop` disabled).
 - Codex session mirror chats can be continued with new prompts (uses `codex exec resume`).
+- For mirrored sessions with known thread ids, the UI can switch into a live app-server thread via `activate_live_chat`.
 - Any mirror chat can be copied into a new editable local chat from the UI (`Copy To Editable Chat`).
 - Import depends on what VS Code writes to local `chatSessions` files.
 - Some in-progress threads may lag or appear partial depending on VS Code storage format.
@@ -113,7 +121,7 @@ npm run tunnel:cf
 - Keep `ALLOWED_ROOTS` narrow.
 - Do not expose an unauthenticated bridge to the public internet.
 
-## Optional Mirror Settings
+## Optional Runtime Settings
 
 ```bash
 VSCODE_MIRROR_ENABLED=1
@@ -121,6 +129,10 @@ VSCODE_MIRROR_SCAN_MS=3000
 VSCODE_MIRROR_MAX_FILES=300
 CODEX_SESSION_MIRROR_ENABLED=1
 CODEX_SESSION_MIRROR_MAX_FILES=120
+APP_SERVER_ENABLED=1
+APP_SERVER_SYNC_MS=5000
+APP_SERVER_THREAD_LIMIT=200
+APP_SERVER_REQUEST_TIMEOUT_MS=25000
 # Optional custom roots (comma-separated)
 # VSCODE_MIRROR_ROOTS=/Users/you/Library/Application Support/Code/User/workspaceStorage
 
