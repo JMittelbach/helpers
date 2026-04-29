@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -20,39 +20,49 @@
       <header class="top">
         <p class="eyebrow">Remote Codex</p>
         <h1>Codex Mobile Bridge</h1>
-        <p class="subline">Steuere deinen Mac-Codex sauber vom Handy.</p>
+        <p class="subline">Run and monitor Codex from your phone.</p>
         <div class="status-row">
           <span id="connectionDot" class="dot offline"></span>
-          <span id="connectionText">Nicht verbunden</span>
+          <span id="connectionText">Disconnected</span>
         </div>
       </header>
 
       <section id="authCard" class="card hidden">
         <h2>Token</h2>
-        <p>Server verlangt ein App-Token.</p>
+        <p>The server requires an app token.</p>
         <div class="row">
           <input id="tokenInput" type="password" placeholder="APP_TOKEN" />
-          <button id="authBtn" class="btn secondary">Verbinden</button>
+          <button id="authBtn" class="btn secondary">Connect</button>
         </div>
       </section>
 
       <section class="card">
+        <h2>Chats</h2>
+        <div class="row">
+          <input id="chatTitleInput" type="text" placeholder="New chat title" />
+          <button id="createChatBtn" class="btn secondary">New</button>
+        </div>
+        <div id="chatList" class="chat-list"></div>
+      </section>
+
+      <section class="card">
         <h2>Run</h2>
+        <p class="meta-line">
+          Selected chat:
+          <strong id="selectedChatName">None</strong>
+        </p>
+
         <label for="cwdInput">Workspace</label>
         <input id="cwdInput" type="text" placeholder="/Users/jannes/Github" />
 
         <label for="modeSelect">Sandbox</label>
         <select id="modeSelect">
-          <option value="read-only">read-only (sicher)</option>
-          <option value="workspace-write">workspace-write (Datei-Aenderungen erlaubt)</option>
+          <option value="read-only">read-only (safe)</option>
+          <option value="workspace-write">workspace-write (file changes allowed)</option>
         </select>
 
         <label for="promptInput">Prompt</label>
-        <textarea
-          id="promptInput"
-          rows="7"
-          placeholder="z.B. Analysiere mein Repo und gib mir einen Plan..."
-        ></textarea>
+        <textarea id="promptInput" rows="7" placeholder="Ask Codex what to do..."></textarea>
 
         <div class="presets" id="presets"></div>
 
@@ -63,12 +73,17 @@
       </section>
 
       <section class="card">
-        <h2>Live</h2>
+        <h2>Conversation</h2>
+        <div id="messagesPanel" class="messages"></div>
+      </section>
+
+      <section class="card">
+        <h2>Live Logs</h2>
         <pre id="logPanel" class="log"></pre>
       </section>
 
       <section class="card">
-        <h2>Antwort</h2>
+        <h2>Latest Answer</h2>
         <article id="finalPanel" class="final"></article>
       </section>
     </main>
