@@ -61,12 +61,12 @@ body {
 }
 
 .top {
-  padding: 0.68rem 0.78rem 0.72rem;
+  padding: 0.58rem 0.72rem 0.62rem;
 }
 
 .card {
   margin-top: 0.85rem;
-  padding: 0.9rem;
+  padding: 0.8rem;
 }
 
 .hidden {
@@ -138,7 +138,7 @@ h1 {
 }
 
 h2 {
-  margin: 0 0 0.6rem;
+  margin: 0 0 0.45rem;
   font-size: 0.98rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -232,9 +232,49 @@ textarea {
 }
 
 .meta-line {
-  margin: 0.2rem 0 0.35rem;
+  margin: 0.15rem 0 0.32rem;
   font-size: 0.87rem;
   color: var(--text-soft);
+}
+
+.compact-card {
+  padding-top: 0.7rem;
+  padding-bottom: 0.7rem;
+}
+
+.collapse {
+  margin-top: 0.5rem;
+  border: 1px solid rgba(126, 163, 206, 0.25);
+  border-radius: 12px;
+  background: rgba(8, 16, 29, 0.42);
+  padding: 0.4rem 0.55rem 0.52rem;
+}
+
+.collapse > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #bdddff;
+  user-select: none;
+}
+
+.collapse > summary::-webkit-details-marker {
+  display: none;
+}
+
+.collapse > summary::after {
+  content: " +";
+  color: #7dcdf2;
+}
+
+.collapse[open] > summary::after {
+  content: " -";
+}
+
+.collapse[open] > summary {
+  margin-bottom: 0.45rem;
 }
 
 .token-grid {
@@ -341,7 +381,7 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  max-height: 46vh;
+  max-height: 42vh;
   overflow: auto;
   padding-right: 0.1rem;
 }

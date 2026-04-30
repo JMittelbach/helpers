@@ -25,7 +25,7 @@
           </a>
         </div>
         <h1>Codex Bridge</h1>
-        <p class="subline">Mobile control for Codex sessions, chats and files.</p>
+        <p class="subline">Tap a chat, send a prompt, keep it moving.</p>
         <div class="status-row">
           <span id="connectionDot" class="dot offline"></span>
           <span id="connectionText">Disconnected</span>
@@ -41,29 +41,33 @@
         </div>
       </section>
 
-      <section class="card">
+      <section class="card compact-card">
         <h2>Tokens</h2>
-        <p id="tokenSourceLine" class="meta-line">Select a chat to see token usage and quota.</p>
-        <div class="token-grid">
-          <article class="token-box">
-            <p class="token-label">Total Tokens</p>
-            <p id="tokenTotalValue" class="token-value">-</p>
-          </article>
-          <article class="token-box">
-            <p class="token-label">Last Run Tokens</p>
-            <p id="tokenLastValue" class="token-value">-</p>
-          </article>
-          <article class="token-box">
-            <p class="token-label">Context Window</p>
-            <p id="tokenContextValue" class="token-value">-</p>
-          </article>
-          <article class="token-box">
-            <p class="token-label">Context Used</p>
-            <p id="tokenContextPercentValue" class="token-value">-</p>
-          </article>
-        </div>
-        <p id="tokenBreakdownLine" class="meta-line">Input/Output breakdown appears with token_count events.</p>
-        <p id="tokenQuotaLine" class="meta-line">Quota: waiting for rate-limit data.</p>
+        <p id="tokenQuickLine" class="meta-line">Select a chat to see token usage.</p>
+        <details id="tokenDetails" class="collapse">
+          <summary>Show token details</summary>
+          <p id="tokenSourceLine" class="meta-line">Select a chat to see token usage and quota.</p>
+          <div class="token-grid">
+            <article class="token-box">
+              <p class="token-label">Total Tokens</p>
+              <p id="tokenTotalValue" class="token-value">-</p>
+            </article>
+            <article class="token-box">
+              <p class="token-label">Last Run Tokens</p>
+              <p id="tokenLastValue" class="token-value">-</p>
+            </article>
+            <article class="token-box">
+              <p class="token-label">Context Window</p>
+              <p id="tokenContextValue" class="token-value">-</p>
+            </article>
+            <article class="token-box">
+              <p class="token-label">Context Used</p>
+              <p id="tokenContextPercentValue" class="token-value">-</p>
+            </article>
+          </div>
+          <p id="tokenBreakdownLine" class="meta-line">Input/Output breakdown appears with token_count events.</p>
+          <p id="tokenQuotaLine" class="meta-line">Quota: waiting for rate-limit data.</p>
+        </details>
       </section>
 
       <section class="card">
@@ -90,7 +94,7 @@
       </section>
 
       <section class="card">
-        <h2>Run</h2>
+        <h2>Chat</h2>
         <p class="meta-line">
           Selected chat:
           <strong id="selectedChatName">None</strong>
@@ -100,34 +104,37 @@
           <strong id="selectedChatSource">-</strong>
         </p>
         <p id="readOnlyHint" class="meta-line hidden">This chat is mirrored and read-only in this web app.</p>
-        <div class="row">
-          <button id="cloneToLocalBtn" class="btn secondary hidden" type="button">Copy To Editable Chat</button>
-          <button id="activateLiveBtn" class="btn secondary hidden" type="button">Open As Live Thread</button>
-        </div>
-
-        <label for="cwdInput">Workspace</label>
-        <input id="cwdInput" type="text" placeholder="/Users/jannes/Github" />
-
-        <label for="modeSelect">Sandbox</label>
-        <select id="modeSelect">
-          <option value="read-only">read-only (safe)</option>
-          <option value="workspace-write">workspace-write (file changes allowed)</option>
-        </select>
-
         <label for="promptInput">Prompt</label>
         <textarea id="promptInput" rows="7" placeholder="Ask Codex what to do..."></textarea>
 
         <div class="presets" id="presets"></div>
 
-        <div id="approvalPanel" class="approvals hidden">
-          <p class="meta-line"><strong>Pending Approvals</strong></p>
-          <div id="approvalList" class="approval-list"></div>
-        </div>
-
         <div class="row actions">
           <button id="runBtn" class="btn primary">Run</button>
           <button id="cancelBtn" class="btn ghost" disabled>Stop</button>
         </div>
+
+        <details id="advancedRun" class="collapse">
+          <summary>Advanced</summary>
+          <div class="row">
+            <button id="cloneToLocalBtn" class="btn secondary hidden" type="button">Copy To Editable Chat</button>
+            <button id="activateLiveBtn" class="btn secondary hidden" type="button">Open As Live Thread</button>
+          </div>
+
+          <label for="cwdInput">Workspace</label>
+          <input id="cwdInput" type="text" placeholder="/Users/jannes/Github" />
+
+          <label for="modeSelect">Sandbox</label>
+          <select id="modeSelect">
+            <option value="read-only">read-only (safe)</option>
+            <option value="workspace-write">workspace-write (file changes allowed)</option>
+          </select>
+
+          <div id="approvalPanel" class="approvals hidden">
+            <p class="meta-line"><strong>Pending Approvals</strong></p>
+            <div id="approvalList" class="approval-list"></div>
+          </div>
+        </details>
       </section>
 
       <section class="card">
@@ -137,32 +144,35 @@
 
       <section class="card">
         <h2>Files</h2>
-        <div class="row">
-          <select id="fileRootSelect"></select>
-        </div>
-        <div id="fileQuickPaths" class="quick-paths"></div>
-        <div class="row">
-          <button id="fileUpBtn" class="btn secondary" type="button">Up</button>
-          <button id="fileRefreshBtn" class="btn secondary" type="button">Refresh</button>
-        </div>
-        <div class="row">
-          <input id="fileJumpInput" type="text" placeholder="/Users/jannes/Github/helpers" />
-          <button id="fileJumpBtn" class="btn secondary" type="button">Open</button>
-        </div>
-        <p id="filePathDisplay" class="path-line">-</p>
-        <div id="fileList" class="file-list"></div>
-        <h3>Preview</h3>
-        <pre id="filePreview" class="log"></pre>
+        <details class="collapse">
+          <summary>Open file browser</summary>
+          <div class="row">
+            <select id="fileRootSelect"></select>
+          </div>
+          <div id="fileQuickPaths" class="quick-paths"></div>
+          <div class="row">
+            <button id="fileUpBtn" class="btn secondary" type="button">Up</button>
+            <button id="fileRefreshBtn" class="btn secondary" type="button">Refresh</button>
+          </div>
+          <div class="row">
+            <input id="fileJumpInput" type="text" placeholder="/Users/jannes/Github/helpers" />
+            <button id="fileJumpBtn" class="btn secondary" type="button">Open</button>
+          </div>
+          <p id="filePathDisplay" class="path-line">-</p>
+          <div id="fileList" class="file-list"></div>
+          <h3>Preview</h3>
+          <pre id="filePreview" class="log"></pre>
+        </details>
       </section>
 
       <section class="card">
-        <h2>Live Logs</h2>
-        <pre id="logPanel" class="log"></pre>
-      </section>
-
-      <section class="card">
-        <h2>Latest Answer</h2>
-        <article id="finalPanel" class="final"></article>
+        <details class="collapse">
+          <summary>Live logs and latest answer</summary>
+          <h3>Live Logs</h3>
+          <pre id="logPanel" class="log"></pre>
+          <h3>Latest Answer</h3>
+          <article id="finalPanel" class="final"></article>
+        </details>
       </section>
     </main>
 

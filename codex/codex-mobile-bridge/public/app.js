@@ -4,6 +4,7 @@ const githubAccountLink = document.getElementById("githubAccountLink");
 const authCard = document.getElementById("authCard");
 const tokenInput = document.getElementById("tokenInput");
 const authBtn = document.getElementById("authBtn");
+const tokenQuickLine = document.getElementById("tokenQuickLine");
 const tokenSourceLine = document.getElementById("tokenSourceLine");
 const tokenTotalValue = document.getElementById("tokenTotalValue");
 const tokenLastValue = document.getElementById("tokenLastValue");
@@ -28,6 +29,7 @@ const modeSelect = document.getElementById("modeSelect");
 const promptInput = document.getElementById("promptInput");
 const runBtn = document.getElementById("runBtn");
 const cancelBtn = document.getElementById("cancelBtn");
+const advancedRun = document.getElementById("advancedRun");
 const approvalPanel = document.getElementById("approvalPanel");
 const approvalList = document.getElementById("approvalList");
 const messagesPanel = document.getElementById("messagesPanel");
@@ -369,6 +371,9 @@ function formatResetTs(seconds) {
 }
 
 function setTokenPanelEmpty(message) {
+  if (tokenQuickLine) {
+    tokenQuickLine.textContent = message;
+  }
   tokenSourceLine.textContent = message;
   tokenTotalValue.textContent = "-";
   tokenLastValue.textContent = "-";
@@ -449,6 +454,13 @@ function renderTokenPanel() {
   tokenLastValue.textContent = last ? formatInt(last.totalTokens) : "-";
   tokenContextValue.textContent = context ? formatInt(context) : "-";
   tokenContextPercentValue.textContent = contextPct === null ? "-" : formatPercent(contextPct);
+  if (tokenQuickLine) {
+    tokenQuickLine.textContent = [
+      `Total ${total ? formatInt(total.totalTokens) : "-"}`,
+      `Last ${last ? formatInt(last.totalTokens) : "-"}`,
+      `Context ${contextPct === null ? "-" : formatPercent(contextPct)}`
+    ].join(" • ");
+  }
 
   if (total) {
     tokenBreakdownLine.textContent =
@@ -739,7 +751,7 @@ function renderChatList() {
     btn.appendChild(preview);
 
     btn.addEventListener("click", () => {
-      selectChat(chat.id, true);
+      selectChat(chat.id, true, { focusComposer: true });
     });
 
     chatList.appendChild(btn);
@@ -870,6 +882,9 @@ function renderApprovals() {
   const show = Boolean(chat && src === "live" && list.length > 0);
   approvalPanel.classList.toggle("hidden", !show);
   approvalList.innerHTML = "";
+  if (show && advancedRun && !advancedRun.open) {
+    advancedRun.open = true;
+  }
   if (!show) {
     return;
   }
@@ -1059,7 +1074,28 @@ function renderFileEntries(entries) {
   });
 }
 
-function selectChat(chatId, requestDetail) {
+function focusComposer() {
+  if (!promptInput) {
+    return;
+  }
+  const runCard = promptInput.closest(".card");
+  if (runCard) {
+    runCard.scrollIntoView({
+      behavior: "smooth",
+      block: "start"
+    });
+  }
+  requestAnimationFrame(() => {
+    try {
+      promptInput.focus({ preventScroll: true });
+    } catch {
+      promptInput.focus();
+    }
+  });
+}
+
+function selectChat(chatId, requestDetail, options = {}) {
+  const focusOnComposer = Boolean(options.focusComposer);
   selectedChatId = chatId;
   const chat = getChatSummary(chatId);
 
@@ -1085,6 +1121,9 @@ function selectChat(chatId, requestDetail) {
 
   if (requestDetail && chatId) {
     send({ type: "get_chat", chatId });
+  }
+  if (focusOnComposer && chat) {
+    focusComposer();
   }
 }
 
@@ -1409,15 +1448,13 @@ function handleServerMessage(data) {
     approvalsByChat.set(data.chat.id, approvalsByChat.get(data.chat.id) || []);
     renderChatList();
 
-    if (!selectedChatId) {
-      selectChat(data.chat.id, true);
-    }
+    selectChat(data.chat.id, true, { focusComposer: true });
     return;
   }
 
   if (data.type === "chat/cloned") {
     if (data.chatId) {
-      selectChat(data.chatId, true);
+      selectChat(data.chatId, true, { focusComposer: true });
     }
     return;
   }
@@ -1426,7 +1463,7 @@ function handleServerMessage(data) {
     const nextChatId = typeof data.chatId === "string" ? data.chatId : "";
     if (nextChatId) {
       addLogLine(nextChatId, "live thread activated");
-      selectChat(nextChatId, true);
+      selectChat(nextChatId, true, { focusComposer: true });
     }
     return;
   }
@@ -1620,7 +1657,7 @@ runBtn.addEventListener("click", () => {
     const linked = linkedLiveChatId(selected);
     const key = sourceKey(selected);
     if (linked) {
-      selectChat(linked, true);
+      selectChat(linked, true, { focusComposer: true });
       return;
     }
     if ((key === "vscode" || key === "codex") && appServerEnabled && appServerReady) {
