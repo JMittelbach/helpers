@@ -2,7 +2,7 @@ const http = require("http");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { spawn } = require("child_process");
+const { execSync, spawn } = require("child_process");
 
 require("dotenv").config();
 
@@ -14,6 +14,7 @@ const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 4173);
 const APP_TOKEN = process.env.APP_TOKEN || "";
 const EXPLICIT_CODEX_BIN = process.env.CODEX_BIN || "";
+const EXPLICIT_GITHUB_PROFILE_URL = process.env.GITHUB_PROFILE_URL || "";
 const DEFAULT_CWD = path.resolve(process.env.DEFAULT_CWD || "/Users/jannes/Github");
 const ALLOWED_ROOTS = (process.env.ALLOWED_ROOTS || DEFAULT_CWD)
   .split(",")
@@ -68,6 +69,73 @@ function dedupePaths(paths) {
     uniq.push(resolved);
   }
   return uniq;
+}
+
+function normalizeGithubProfileUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") {
+    return "";
+  }
+  const trimmed = rawUrl.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed.replace(/^\/+/, "")}`;
+  try {
+    const parsed = new URL(withProtocol);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return "";
+    }
+    parsed.hash = "";
+    parsed.search = "";
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function githubOwnerFromRemote(remoteUrl) {
+  const raw = typeof remoteUrl === "string" ? remoteUrl.trim() : "";
+  if (!raw) {
+    return "";
+  }
+  const patterns = [
+    /^git@github\.com:([^/]+)\/[^/]+(?:\.git)?$/i,
+    /^ssh:\/\/git@github\.com\/([^/]+)\/[^/]+(?:\.git)?\/?$/i,
+    /^https?:\/\/(?:[^@/]+@)?github\.com\/([^/]+)\/[^/]+(?:\.git)?\/?$/i
+  ];
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    if (match && match[1]) {
+      return match[1];
+    }
+  }
+  return "";
+}
+
+function detectGithubProfileUrl() {
+  const explicit = normalizeGithubProfileUrl(EXPLICIT_GITHUB_PROFILE_URL);
+  if (explicit) {
+    return explicit;
+  }
+
+  const probeDirs = dedupePaths([__dirname, process.cwd(), DEFAULT_CWD]);
+  for (const probeDir of probeDirs) {
+    try {
+      const remote = execSync("git config --get remote.origin.url", {
+        cwd: probeDir,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"]
+      }).trim();
+      const owner = githubOwnerFromRemote(remote);
+      if (owner) {
+        return `https://github.com/${owner}`;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return "";
 }
 
 const DEFAULT_BROWSE_ROOTS = dedupePaths([
@@ -144,6 +212,7 @@ function findBundledCodex() {
 
 const DETECTED_CODEX_BIN = findBundledCodex();
 const CODEX_BIN = EXPLICIT_CODEX_BIN || DETECTED_CODEX_BIN || "codex";
+const GITHUB_PROFILE_URL = detectGithubProfileUrl();
 
 function isPathAllowed(targetPath) {
   const resolvedTarget = path.resolve(targetPath);
@@ -1187,6 +1256,10 @@ function parseCodexSessionChatFromFile(filePath, stat, indexMeta) {
   let sessionMeta = null;
   const messages = [];
   let lastTs = stat.mtimeMs;
+  const openTurnIds = new Set();
+  let taskStartedCount = 0;
+  let taskCompleteCount = 0;
+  let lastOpenTurnId = "";
 
   for (const line of lines) {
     const event = safeJsonParse(line);
@@ -1198,6 +1271,30 @@ function parseCodexSessionChatFromFile(filePath, stat, indexMeta) {
       const ts = Date.parse(event.timestamp);
       if (!Number.isNaN(ts)) {
         lastTs = ts;
+      }
+    }
+
+    if (event.type === "event_msg" && event.payload && typeof event.payload === "object") {
+      const evtType = event.payload.type;
+      const turnId = typeof event.payload.turn_id === "string" ? event.payload.turn_id : "";
+      if (evtType === "task_started") {
+        taskStartedCount += 1;
+        if (turnId) {
+          openTurnIds.add(turnId);
+          lastOpenTurnId = turnId;
+        }
+        continue;
+      }
+      if (evtType === "task_complete") {
+        taskCompleteCount += 1;
+        if (turnId) {
+          openTurnIds.delete(turnId);
+          if (turnId === lastOpenTurnId) {
+            const tail = Array.from(openTurnIds);
+            lastOpenTurnId = tail.length > 0 ? tail[tail.length - 1] : "";
+          }
+        }
+        continue;
       }
     }
 
@@ -1251,6 +1348,8 @@ function parseCodexSessionChatFromFile(filePath, stat, indexMeta) {
 
   const createdAt = toIsoFromAny(sessionMeta?.timestamp, stat.mtimeMs);
   const updatedAt = toIsoFromAny((indexMeta && indexMeta.updatedAt) || lastTs, stat.mtimeMs);
+  const isRunning = openTurnIds.size > 0 || taskStartedCount > taskCompleteCount;
+  const currentRunId = isRunning ? lastOpenTurnId || `codex_run_${sessionId.slice(0, 8)}` : null;
 
   const chat = {
     id: `codex:${sessionId}`,
@@ -1259,14 +1358,15 @@ function parseCodexSessionChatFromFile(filePath, stat, indexMeta) {
     title: title.slice(0, 90),
     createdAt,
     updatedAt,
-    status: "idle",
-    currentRunId: null,
+    status: isRunning ? "running" : "idle",
+    currentRunId,
     lastError: "",
     cwd: sessionMeta?.cwd || DEFAULT_CWD,
     mode: "read-only",
     logs: [
       `[mirror] Codex session from ${filePath}`,
-      `[mirror] messages=${messages.length}`
+      `[mirror] messages=${messages.length}`,
+      `[mirror] tasks started=${taskStartedCount} completed=${taskCompleteCount} open=${openTurnIds.size}`
     ],
     messages,
     runs: [],
@@ -2522,7 +2622,8 @@ app.get("/health", (_req, res) => {
     appServerEnabled: APP_SERVER_ENABLED,
     appServerReady: appServerState.ready,
     vscodeMirrorScanMs: VSCODE_MIRROR_SCAN_MS,
-    browseRoots: BROWSE_ROOTS
+    browseRoots: BROWSE_ROOTS,
+    githubProfileUrl: GITHUB_PROFILE_URL
   });
 });
 
@@ -2543,6 +2644,7 @@ wss.on("connection", (ws) => {
     allowedRoots: ALLOWED_ROOTS,
     codexBin: CODEX_BIN,
     browseRoots: BROWSE_ROOTS,
+    githubProfileUrl: GITHUB_PROFILE_URL,
     mirror: {
       vscodeEnabled: VSCODE_MIRROR_ENABLED,
       codexSessionEnabled: CODEX_SESSION_MIRROR_ENABLED
@@ -3222,6 +3324,7 @@ server.listen(PORT, HOST, () => {
   console.log(`default cwd: ${DEFAULT_CWD}`);
   console.log(`allowed roots: ${ALLOWED_ROOTS.join(", ")}`);
   console.log(`codex bin: ${CODEX_BIN}`);
+  console.log(`github profile url: ${GITHUB_PROFILE_URL || "(not detected)"}`);
   console.log(`token required: ${APP_TOKEN ? "yes" : "no"}`);
   console.log(`chat store: ${STORE_PATH}`);
   console.log(`vscode mirror: ${VSCODE_MIRROR_ENABLED ? "on" : "off"}`);

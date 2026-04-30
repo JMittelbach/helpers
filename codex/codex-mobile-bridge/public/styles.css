@@ -47,7 +47,7 @@ body {
 .app {
   width: min(860px, 100% - 1.1rem);
   margin: 0 auto;
-  padding: 0.8rem 0 2.2rem;
+  padding: 0.55rem 0 2.2rem;
 }
 
 .top,
@@ -61,7 +61,7 @@ body {
 }
 
 .top {
-  padding: 1rem 1rem 0.95rem;
+  padding: 0.68rem 0.78rem 0.72rem;
 }
 
 .card {
@@ -77,28 +77,48 @@ body {
   margin: 0;
   text-transform: uppercase;
   letter-spacing: 0.13em;
-  font-size: 0.7rem;
+  font-size: 0.64rem;
   color: var(--text-soft);
 }
 
 h1 {
-  margin: 0.2rem 0 0.35rem;
-  font-size: clamp(1.3rem, 6.2vw, 2rem);
-  line-height: 1.08;
+  margin: 0.12rem 0 0.22rem;
+  font-size: clamp(1.04rem, 5vw, 1.42rem);
+  line-height: 1.1;
 }
 
 .subline {
   margin: 0;
   color: var(--text-soft);
-  line-height: 1.35;
+  line-height: 1.26;
+  font-size: 0.86rem;
 }
 
 .status-row {
-  margin-top: 0.78rem;
+  margin-top: 0.45rem;
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.92rem;
+  font-size: 0.82rem;
+}
+
+.top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.top-link {
+  width: auto;
+  text-decoration: none;
+  border: 1px solid rgba(57, 189, 232, 0.44);
+  background: rgba(57, 189, 232, 0.12);
+  color: #a7ebff;
+  border-radius: 999px;
+  padding: 0.14rem 0.46rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.03em;
 }
 
 .dot {
@@ -224,6 +244,10 @@ textarea {
 
 #refreshMirrorBtn {
   max-width: 190px;
+}
+
+#fileJumpBtn {
+  max-width: 108px;
 }
 
 .presets {
@@ -436,6 +460,24 @@ textarea {
   background: rgba(8, 14, 27, 0.84);
   max-height: 30vh;
   overflow: auto;
+}
+
+.quick-paths {
+  margin-top: 0.52rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.quick-path-btn {
+  width: auto;
+  border: 1px solid rgba(57, 189, 232, 0.3);
+  background: rgba(57, 189, 232, 0.1);
+  color: #c8efff;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.72rem;
+  cursor: pointer;
 }
 
 .file-empty {

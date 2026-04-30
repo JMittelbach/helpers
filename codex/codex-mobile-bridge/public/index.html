@@ -18,9 +18,14 @@
     <div class="ambient"></div>
     <main class="app">
       <header class="top">
-        <p class="eyebrow">Remote Control</p>
-        <h1>Codex Mobile Bridge</h1>
-        <p class="subline">Dark mobile cockpit for Codex + VS Code + session mirror.</p>
+        <div class="top-row">
+          <p class="eyebrow">Remote Control</p>
+          <a id="githubAccountLink" class="top-link hidden" href="#" target="_blank" rel="noopener noreferrer">
+            GitHub
+          </a>
+        </div>
+        <h1>Codex Bridge</h1>
+        <p class="subline">Mobile control for Codex sessions, chats and files.</p>
         <div class="status-row">
           <span id="connectionDot" class="dot offline"></span>
           <span id="connectionText">Disconnected</span>
@@ -110,9 +115,14 @@
         <div class="row">
           <select id="fileRootSelect"></select>
         </div>
+        <div id="fileQuickPaths" class="quick-paths"></div>
         <div class="row">
           <button id="fileUpBtn" class="btn secondary" type="button">Up</button>
           <button id="fileRefreshBtn" class="btn secondary" type="button">Refresh</button>
+        </div>
+        <div class="row">
+          <input id="fileJumpInput" type="text" placeholder="/Users/jannes/Github/helpers" />
+          <button id="fileJumpBtn" class="btn secondary" type="button">Open</button>
         </div>
         <p id="filePathDisplay" class="path-line">-</p>
         <div id="fileList" class="file-list"></div>

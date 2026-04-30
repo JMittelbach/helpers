@@ -14,6 +14,8 @@ Mobile-first web app to run Codex on your Mac from a phone browser.
 - Read-only VS Code chat mirror (best-effort import from local session files)
 - Codex session mirror from `~/.codex/sessions` with mobile continue support
 - Built-in file browser for allowed roots (including VS Code/Codex folders)
+- Quick-path file navigation chips + direct path jump in mobile UI
+- GitHub profile shortcut link in header (auto-detected or configurable)
 - Optional token auth (`APP_TOKEN`)
 - Workspace safety guard via `ALLOWED_ROOTS`
 - Optional Cloudflare quick tunnel for remote access
@@ -133,6 +135,7 @@ APP_SERVER_ENABLED=1
 APP_SERVER_SYNC_MS=5000
 APP_SERVER_THREAD_LIMIT=200
 APP_SERVER_REQUEST_TIMEOUT_MS=25000
+GITHUB_PROFILE_URL=https://github.com/your-account
 # Optional custom roots (comma-separated)
 # VSCODE_MIRROR_ROOTS=/Users/you/Library/Application Support/Code/User/workspaceStorage
 
