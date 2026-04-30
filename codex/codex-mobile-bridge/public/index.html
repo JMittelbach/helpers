@@ -32,6 +32,13 @@
         </div>
       </header>
 
+      <section id="mainTabs" class="card tabbar-card">
+        <div class="tabbar">
+          <button id="tabChatsBtn" class="btn secondary tab-btn active" type="button">Chats</button>
+          <button id="tabTokensBtn" class="btn secondary tab-btn" type="button">Tokens</button>
+        </div>
+      </section>
+
       <section id="chatsCard" class="card">
         <h2>Chats</h2>
         <div class="row">
@@ -53,6 +60,45 @@
         </div>
         <p id="chatStats" class="meta-line">0 chats</p>
         <div id="chatList" class="chat-list"></div>
+      </section>
+
+      <section id="tokensCard" class="card hidden">
+        <h2>Token Stats</h2>
+        <p id="tokenOverviewLine" class="meta-line">No token telemetry yet.</p>
+
+        <div class="token-balances">
+          <article class="balance-box">
+            <p class="token-label">Verbraucht</p>
+            <p id="tokenUsedLabel" class="token-value">-</p>
+            <div class="meter"><div id="tokenUsedBar" class="meter-fill"></div></div>
+          </article>
+          <article class="balance-box">
+            <p class="token-label">Übrig</p>
+            <p id="tokenLeftLabel" class="token-value">-</p>
+            <div class="meter"><div id="tokenLeftBar" class="meter-fill meter-fill-ok"></div></div>
+          </article>
+        </div>
+
+        <div class="row">
+          <select id="tokenSourceFilter">
+            <option value="all">All Sources</option>
+            <option value="live">Live Threads</option>
+            <option value="web">Web App</option>
+            <option value="vscode">VS Code Mirror</option>
+            <option value="codex">Codex Session Mirror</option>
+          </select>
+          <select id="tokenStatusFilter">
+            <option value="all">All Status</option>
+            <option value="running">Running</option>
+            <option value="idle">Idle</option>
+            <option value="failed">Failed</option>
+          </select>
+        </div>
+        <div class="row">
+          <input id="tokenSearchInput" type="text" placeholder="Filter by chat title..." />
+        </div>
+        <p id="tokenStatsMeta" class="meta-line">0 chats</p>
+        <div id="tokenStatsList" class="token-list"></div>
       </section>
 
       <section id="chatCard" class="card">

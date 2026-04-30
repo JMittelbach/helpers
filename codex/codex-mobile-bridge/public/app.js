@@ -2,18 +2,28 @@ const connectionDot = document.getElementById("connectionDot");
 const connectionText = document.getElementById("connectionText");
 const githubAccountLink = document.getElementById("githubAccountLink");
 const mainHeader = document.getElementById("mainHeader");
+const mainTabs = document.getElementById("mainTabs");
+const tabChatsBtn = document.getElementById("tabChatsBtn");
+const tabTokensBtn = document.getElementById("tabTokensBtn");
 const chatsCard = document.getElementById("chatsCard");
+const tokensCard = document.getElementById("tokensCard");
+const chatCard = document.getElementById("chatCard");
+const conversationCard = document.getElementById("conversationCard");
+const filesCard = document.getElementById("filesCard");
+const opsCard = document.getElementById("opsCard");
 const chatDetailTop = document.getElementById("chatDetailTop");
 const backToChatsBtn = document.getElementById("backToChatsBtn");
 const chatDetailCaption = document.getElementById("chatDetailCaption");
-const tokenQuickLine = document.getElementById("tokenQuickLine");
-const tokenSourceLine = document.getElementById("tokenSourceLine");
-const tokenTotalValue = document.getElementById("tokenTotalValue");
-const tokenLastValue = document.getElementById("tokenLastValue");
-const tokenContextValue = document.getElementById("tokenContextValue");
-const tokenContextPercentValue = document.getElementById("tokenContextPercentValue");
-const tokenBreakdownLine = document.getElementById("tokenBreakdownLine");
-const tokenQuotaLine = document.getElementById("tokenQuotaLine");
+const tokenOverviewLine = document.getElementById("tokenOverviewLine");
+const tokenUsedLabel = document.getElementById("tokenUsedLabel");
+const tokenLeftLabel = document.getElementById("tokenLeftLabel");
+const tokenUsedBar = document.getElementById("tokenUsedBar");
+const tokenLeftBar = document.getElementById("tokenLeftBar");
+const tokenSourceFilterSelect = document.getElementById("tokenSourceFilter");
+const tokenStatusFilterSelect = document.getElementById("tokenStatusFilter");
+const tokenSearchInput = document.getElementById("tokenSearchInput");
+const tokenStatsMeta = document.getElementById("tokenStatsMeta");
+const tokenStatsList = document.getElementById("tokenStatsList");
 const chatTitleInput = document.getElementById("chatTitleInput");
 const createChatBtn = document.getElementById("createChatBtn");
 const refreshMirrorBtn = document.getElementById("refreshMirrorBtn");
@@ -79,6 +89,7 @@ let appServerReady = false;
 let pendingAuthToken = "";
 let queuedLiveActivationChatId = "";
 let chatFocusMode = false;
+let activeRootTab = "chats";
 
 const chats = new Map();
 const details = new Map();
@@ -182,6 +193,7 @@ function setStatus(text, online) {
 function setChatFocusMode(enabled) {
   chatFocusMode = Boolean(enabled);
   document.body.classList.toggle("chat-focus", chatFocusMode);
+  applyRootLayout();
   if (!chatDetailCaption) {
     return;
   }
@@ -191,6 +203,46 @@ function setChatFocusMode(enabled) {
   }
   const selected = getChatSummary(selectedChatId);
   chatDetailCaption.textContent = selected ? sourceLabel(selected) : "Chat view";
+}
+
+function applyRootLayout() {
+  const tokensMode = !chatFocusMode && activeRootTab === "tokens";
+  const chatsMode = !chatFocusMode && activeRootTab === "chats";
+  if (mainTabs) {
+    mainTabs.classList.toggle("hidden", chatFocusMode);
+  }
+  if (chatsCard) {
+    chatsCard.classList.toggle("hidden", !chatsMode);
+  }
+  if (tokensCard) {
+    tokensCard.classList.toggle("hidden", !tokensMode);
+  }
+  if (chatCard) {
+    chatCard.classList.toggle("hidden", !chatFocusMode);
+  }
+  if (conversationCard) {
+    conversationCard.classList.toggle("hidden", !chatFocusMode);
+  }
+  if (filesCard) {
+    filesCard.classList.toggle("hidden", true);
+  }
+  if (opsCard) {
+    opsCard.classList.toggle("hidden", true);
+  }
+  if (tabChatsBtn) {
+    tabChatsBtn.classList.toggle("active", activeRootTab === "chats");
+  }
+  if (tabTokensBtn) {
+    tabTokensBtn.classList.toggle("active", activeRootTab === "tokens");
+  }
+}
+
+function setRootTab(tabName) {
+  activeRootTab = tabName === "tokens" ? "tokens" : "chats";
+  applyRootLayout();
+  if (activeRootTab === "tokens") {
+    renderTokenPanel();
+  }
 }
 
 function applyGithubProfileUrl(rawUrl) {
@@ -369,38 +421,28 @@ function formatPercent(value) {
   return `${Math.round(n * 10) / 10}%`;
 }
 
-function formatResetTs(seconds) {
-  const n = toIntOrNull(seconds);
-  if (n === null) {
-    return "-";
-  }
-  const d = new Date(n * 1000);
-  if (Number.isNaN(d.getTime())) {
-    return "-";
-  }
-  return d.toLocaleString("en-US", {
-    hour12: false,
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-}
-
 function setTokenPanelEmpty(message) {
-  if (!tokenSourceLine || !tokenTotalValue || !tokenLastValue || !tokenContextValue || !tokenContextPercentValue || !tokenBreakdownLine || !tokenQuotaLine) {
-    return;
+  if (tokenOverviewLine) {
+    tokenOverviewLine.textContent = message;
   }
-  if (tokenQuickLine) {
-    tokenQuickLine.textContent = message;
+  if (tokenUsedLabel) {
+    tokenUsedLabel.textContent = "-";
   }
-  tokenSourceLine.textContent = message;
-  tokenTotalValue.textContent = "-";
-  tokenLastValue.textContent = "-";
-  tokenContextValue.textContent = "-";
-  tokenContextPercentValue.textContent = "-";
-  tokenBreakdownLine.textContent = "Input/Output breakdown appears with token_count events.";
-  tokenQuotaLine.textContent = "Quota: waiting for rate-limit data.";
+  if (tokenLeftLabel) {
+    tokenLeftLabel.textContent = "-";
+  }
+  if (tokenStatsMeta) {
+    tokenStatsMeta.textContent = "0 chats";
+  }
+  if (tokenStatsList) {
+    tokenStatsList.innerHTML = "";
+  }
+  if (tokenUsedBar) {
+    tokenUsedBar.style.width = "0%";
+  }
+  if (tokenLeftBar) {
+    tokenLeftBar.style.width = "0%";
+  }
 }
 
 function mergeTokenStats(baseStats, incomingStats) {
@@ -446,82 +488,181 @@ function applyTokenStatsToChat(chatId, incomingStats) {
   }
 }
 
-function renderTokenPanel() {
-  if (!tokenSourceLine || !tokenTotalValue || !tokenLastValue || !tokenContextValue || !tokenContextPercentValue || !tokenBreakdownLine || !tokenQuotaLine) {
-    return;
-  }
-  const chat = getChatSummary(selectedChatId);
+function toTokenRow(chat) {
   if (!chat) {
-    setTokenPanelEmpty("Select a chat to see token usage and quota.");
-    return;
+    return null;
   }
-
   const detail = details.get(chat.id);
-  const tokenStats = normalizeTokenStats((detail && detail.tokenStats) || chat.tokenStats);
-  if (!tokenStats) {
-    setTokenPanelEmpty("No token telemetry yet for this chat.");
+  const stats = normalizeTokenStats((detail && detail.tokenStats) || chat.tokenStats);
+  const totalTokens = stats && stats.total ? toIntOrNull(stats.total.totalTokens) : null;
+  const contextWindow = stats ? toIntOrNull(stats.modelContextWindow) : null;
+  const contextUsedPercent =
+    contextWindow && contextWindow > 0 && totalTokens !== null
+      ? Math.max(0, Math.min(100, (totalTokens / contextWindow) * 100))
+      : null;
+  const contextLeftTokens =
+    contextWindow && contextWindow > 0 && totalTokens !== null ? Math.max(0, contextWindow - totalTokens) : null;
+  const rateLimits = stats && stats.rateLimits ? stats.rateLimits : {};
+  const primaryUsed = rateLimits.primary ? toNumberOrNull(rateLimits.primary.usedPercent) : null;
+  const secondaryUsed = rateLimits.secondary ? toNumberOrNull(rateLimits.secondary.usedPercent) : null;
+  const rateUsedPercent = primaryUsed !== null ? primaryUsed : secondaryUsed;
+  const rateLeftPercent = rateUsedPercent === null ? null : Math.max(0, 100 - rateUsedPercent);
+
+  return {
+    chat,
+    stats,
+    totalTokens,
+    contextWindow,
+    contextUsedPercent,
+    contextLeftTokens,
+    rateUsedPercent,
+    rateLeftPercent
+  };
+}
+
+function tokenRowsFiltered() {
+  const sourceFilter = (tokenSourceFilterSelect && tokenSourceFilterSelect.value) || "all";
+  const statusFilter = (tokenStatusFilterSelect && tokenStatusFilterSelect.value) || "all";
+  const search = ((tokenSearchInput && tokenSearchInput.value) || "").trim().toLowerCase();
+
+  return toChatArrayUnfiltered()
+    .map((chat) => toTokenRow(chat))
+    .filter((row) => {
+      if (!row || !row.chat) {
+        return false;
+      }
+      if (sourceFilter !== "all" && sourceKey(row.chat) !== sourceFilter) {
+        return false;
+      }
+      const normalizedStatus =
+        row.chat.status === "running" || row.chat.status === "failed" ? row.chat.status : "idle";
+      if (statusFilter !== "all" && normalizedStatus !== statusFilter) {
+        return false;
+      }
+      if (!search) {
+        return true;
+      }
+      return String(row.chat.title || "").toLowerCase().includes(search);
+    });
+}
+
+function renderTokenRowList(rows) {
+  if (!tokenStatsList) {
+    return;
+  }
+  tokenStatsList.innerHTML = "";
+  if (!rows.length) {
+    const empty = document.createElement("p");
+    empty.className = "chat-empty";
+    empty.textContent = "No chats match this token filter.";
+    tokenStatsList.appendChild(empty);
     return;
   }
 
-  const total = tokenStats.total || null;
-  const last = tokenStats.last || null;
-  const context = toIntOrNull(tokenStats.modelContextWindow);
-  const contextTotal = total ? toIntOrNull(total.totalTokens) : null;
-  const contextPct =
-    context && context > 0 && contextTotal !== null ? Math.min(100, Math.max(0, (contextTotal / context) * 100)) : null;
+  rows.forEach((row) => {
+    const box = document.createElement("article");
+    box.className = "token-item";
 
-  const source = sourceLabel(chat);
-  const updated = tokenStats.updatedAt ? formatShortTime(tokenStats.updatedAt) : "-";
-  tokenSourceLine.textContent = `${source} • updated ${updated}`;
-  tokenTotalValue.textContent = total ? formatInt(total.totalTokens) : "-";
-  tokenLastValue.textContent = last ? formatInt(last.totalTokens) : "-";
-  tokenContextValue.textContent = context ? formatInt(context) : "-";
-  tokenContextPercentValue.textContent = contextPct === null ? "-" : formatPercent(contextPct);
-  if (tokenQuickLine) {
-    tokenQuickLine.textContent = [
-      `Total ${total ? formatInt(total.totalTokens) : "-"}`,
-      `Last ${last ? formatInt(last.totalTokens) : "-"}`,
-      `Context ${contextPct === null ? "-" : formatPercent(contextPct)}`
-    ].join(" • ");
+    const top = document.createElement("div");
+    top.className = "token-item-top";
+
+    const title = document.createElement("div");
+    title.className = "token-item-title";
+    title.textContent = row.chat.title || "Untitled";
+
+    const source = document.createElement("span");
+    const srcKey = sourceKey(row.chat);
+    source.className = `chat-source source-${srcKey}`;
+    source.textContent = srcKey;
+
+    const status = document.createElement("span");
+    status.className = `chat-badge status-${row.chat.status || "idle"}`;
+    status.textContent = statusLabel(row.chat.status);
+
+    top.appendChild(title);
+    top.appendChild(source);
+    top.appendChild(status);
+    box.appendChild(top);
+
+    const line = document.createElement("p");
+    line.className = "token-item-meta";
+    if (!row.stats) {
+      line.textContent = "No token telemetry.";
+    } else {
+      const parts = [];
+      parts.push(`used ${row.contextUsedPercent === null ? "-" : formatPercent(row.contextUsedPercent)}`);
+      parts.push(`total ${row.totalTokens === null ? "-" : formatInt(row.totalTokens)}`);
+      if (row.contextLeftTokens !== null) {
+        parts.push(`left ${formatInt(row.contextLeftTokens)}`);
+      }
+      if (row.rateUsedPercent !== null) {
+        parts.push(`quota ${formatPercent(row.rateUsedPercent)}`);
+      }
+      line.textContent = parts.join(" • ");
+    }
+    box.appendChild(line);
+
+    box.addEventListener("click", () => {
+      selectChat(row.chat.id, true, { focusComposer: true, openChatView: true });
+    });
+
+    tokenStatsList.appendChild(box);
+  });
+}
+
+function renderTokenPanel() {
+  if (!tokenOverviewLine || !tokenUsedLabel || !tokenLeftLabel || !tokenStatsMeta || !tokenStatsList) {
+    return;
+  }
+  const rows = tokenRowsFiltered();
+  const withTelemetry = rows.filter((row) => Boolean(row.stats));
+  tokenStatsMeta.textContent = `${rows.length} chats • ${withTelemetry.length} with token stats`;
+
+  if (rows.length === 0) {
+    setTokenPanelEmpty("No token telemetry yet.");
+    renderTokenRowList(rows);
+    return;
   }
 
-  if (total) {
-    tokenBreakdownLine.textContent =
-      `Total: in ${formatInt(total.inputTokens)} • cached ${formatInt(total.cachedInputTokens)} • out ${formatInt(
-        total.outputTokens
-      )} • reasoning ${formatInt(total.reasoningOutputTokens)}`;
-  } else if (last) {
-    tokenBreakdownLine.textContent =
-      `Last: in ${formatInt(last.inputTokens)} • cached ${formatInt(last.cachedInputTokens)} • out ${formatInt(
-        last.outputTokens
-      )} • reasoning ${formatInt(last.reasoningOutputTokens)}`;
+  let usedTokensSum = 0;
+  let contextWindowSum = 0;
+  let rateUsedSum = 0;
+  let rateCount = 0;
+
+  withTelemetry.forEach((row) => {
+    if (row.totalTokens !== null && row.contextWindow !== null && row.contextWindow > 0) {
+      usedTokensSum += row.totalTokens;
+      contextWindowSum += row.contextWindow;
+    }
+    if (row.rateUsedPercent !== null) {
+      rateUsedSum += row.rateUsedPercent;
+      rateCount += 1;
+    }
+  });
+
+  let usedPercent = null;
+  let leftPercent = null;
+  if (contextWindowSum > 0) {
+    usedPercent = Math.max(0, Math.min(100, (usedTokensSum / contextWindowSum) * 100));
+    leftPercent = Math.max(0, 100 - usedPercent);
+    tokenOverviewLine.textContent = `Context usage across filtered chats (${withTelemetry.length} chats with telemetry).`;
+    tokenUsedLabel.textContent = `${formatPercent(usedPercent)} (${formatInt(usedTokensSum)})`;
+    tokenLeftLabel.textContent = `${formatPercent(leftPercent)} (${formatInt(contextWindowSum - usedTokensSum)})`;
+  } else if (rateCount > 0) {
+    usedPercent = Math.max(0, Math.min(100, rateUsedSum / rateCount));
+    leftPercent = Math.max(0, 100 - usedPercent);
+    tokenOverviewLine.textContent = `Rate-limit usage average across filtered chats (${rateCount} chats).`;
+    tokenUsedLabel.textContent = `${formatPercent(usedPercent)} quota`;
+    tokenLeftLabel.textContent = `${formatPercent(leftPercent)} quota`;
   } else {
-    tokenBreakdownLine.textContent = "Input/Output breakdown appears with token_count events.";
+    tokenOverviewLine.textContent = "No token telemetry yet in this filter.";
+    tokenUsedLabel.textContent = "-";
+    tokenLeftLabel.textContent = "-";
   }
 
-  const rate = tokenStats.rateLimits || {};
-  const primary = rate.primary || null;
-  const secondary = rate.secondary || null;
-  const credits = rate.credits || null;
-  const quotaParts = [];
-
-  if (primary) {
-    quotaParts.push(`Primary ${formatPercent(primary.usedPercent)} (reset ${formatResetTs(primary.resetsAt)})`);
-  }
-  if (secondary) {
-    quotaParts.push(`Secondary ${formatPercent(secondary.usedPercent)} (reset ${formatResetTs(secondary.resetsAt)})`);
-  }
-  if (credits) {
-    const balance = credits.balance || "-";
-    const creditLabel =
-      credits.unlimited === true ? "unlimited" : credits.hasCredits === true ? "credits-on" : "credits-off";
-    quotaParts.push(`Credits ${creditLabel} (${balance})`);
-  }
-
-  tokenQuotaLine.textContent =
-    quotaParts.length > 0
-      ? `Quota: ${quotaParts.join(" • ")}`
-      : "Quota: API total balance is not exposed here, only token/rate-limit telemetry.";
+  tokenUsedBar.style.width = `${usedPercent === null ? 0 : usedPercent}%`;
+  tokenLeftBar.style.width = `${leftPercent === null ? 0 : leftPercent}%`;
+  renderTokenRowList(rows);
 }
 
 function getStoredToken() {
@@ -1235,9 +1376,7 @@ function applyRunEvent(chatId, runId, event) {
   const tokenStats = parseTokenStatsFromEvent(event);
   if (tokenStats) {
     applyTokenStatsToChat(chatId, tokenStats);
-    if (selectedChatId === chatId) {
-      renderTokenPanel();
-    }
+    renderTokenPanel();
   }
 
   if (eventType === "item/agentMessage/delta") {
@@ -1781,8 +1920,9 @@ cancelBtn.addEventListener("click", () => {
 if (backToChatsBtn) {
   backToChatsBtn.addEventListener("click", () => {
     setChatFocusMode(false);
-    if (chatsCard) {
-      chatsCard.scrollIntoView({
+    const target = activeRootTab === "tokens" ? tokensCard : chatsCard;
+    if (target) {
+      target.scrollIntoView({
         behavior: "smooth",
         block: "start"
       });
@@ -1871,6 +2011,36 @@ chatSourceFilter.addEventListener("change", () => {
   renderChatList();
 });
 
+if (tabChatsBtn) {
+  tabChatsBtn.addEventListener("click", () => {
+    setRootTab("chats");
+  });
+}
+
+if (tabTokensBtn) {
+  tabTokensBtn.addEventListener("click", () => {
+    setRootTab("tokens");
+  });
+}
+
+if (tokenSourceFilterSelect) {
+  tokenSourceFilterSelect.addEventListener("change", () => {
+    renderTokenPanel();
+  });
+}
+
+if (tokenStatusFilterSelect) {
+  tokenStatusFilterSelect.addEventListener("change", () => {
+    renderTokenPanel();
+  });
+}
+
+if (tokenSearchInput) {
+  tokenSearchInput.addEventListener("input", () => {
+    renderTokenPanel();
+  });
+}
+
 fileRootSelect.addEventListener("change", () => {
   if (!fileRootSelect.value) {
     return;
@@ -1920,6 +2090,7 @@ presets.forEach((preset) => {
   presetsWrap.appendChild(btn);
 });
 
+setRootTab("chats");
 renderTokenPanel();
 connect();
 setInterval(() => {
