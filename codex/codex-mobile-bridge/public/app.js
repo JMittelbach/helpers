@@ -1,9 +1,11 @@
 const connectionDot = document.getElementById("connectionDot");
 const connectionText = document.getElementById("connectionText");
 const githubAccountLink = document.getElementById("githubAccountLink");
-const authCard = document.getElementById("authCard");
-const tokenInput = document.getElementById("tokenInput");
-const authBtn = document.getElementById("authBtn");
+const mainHeader = document.getElementById("mainHeader");
+const chatsCard = document.getElementById("chatsCard");
+const chatDetailTop = document.getElementById("chatDetailTop");
+const backToChatsBtn = document.getElementById("backToChatsBtn");
+const chatDetailCaption = document.getElementById("chatDetailCaption");
 const tokenQuickLine = document.getElementById("tokenQuickLine");
 const tokenSourceLine = document.getElementById("tokenSourceLine");
 const tokenTotalValue = document.getElementById("tokenTotalValue");
@@ -76,6 +78,7 @@ let appServerEnabled = false;
 let appServerReady = false;
 let pendingAuthToken = "";
 let queuedLiveActivationChatId = "";
+let chatFocusMode = false;
 
 const chats = new Map();
 const details = new Map();
@@ -174,6 +177,20 @@ function setStatus(text, online) {
   connectionText.textContent = text;
   connectionDot.classList.toggle("online", online);
   connectionDot.classList.toggle("offline", !online);
+}
+
+function setChatFocusMode(enabled) {
+  chatFocusMode = Boolean(enabled);
+  document.body.classList.toggle("chat-focus", chatFocusMode);
+  if (!chatDetailCaption) {
+    return;
+  }
+  if (!chatFocusMode) {
+    chatDetailCaption.textContent = "Chat view";
+    return;
+  }
+  const selected = getChatSummary(selectedChatId);
+  chatDetailCaption.textContent = selected ? sourceLabel(selected) : "Chat view";
 }
 
 function applyGithubProfileUrl(rawUrl) {
@@ -371,6 +388,9 @@ function formatResetTs(seconds) {
 }
 
 function setTokenPanelEmpty(message) {
+  if (!tokenSourceLine || !tokenTotalValue || !tokenLastValue || !tokenContextValue || !tokenContextPercentValue || !tokenBreakdownLine || !tokenQuotaLine) {
+    return;
+  }
   if (tokenQuickLine) {
     tokenQuickLine.textContent = message;
   }
@@ -427,6 +447,9 @@ function applyTokenStatsToChat(chatId, incomingStats) {
 }
 
 function renderTokenPanel() {
+  if (!tokenSourceLine || !tokenTotalValue || !tokenLastValue || !tokenContextValue || !tokenContextPercentValue || !tokenBreakdownLine || !tokenQuotaLine) {
+    return;
+  }
   const chat = getChatSummary(selectedChatId);
   if (!chat) {
     setTokenPanelEmpty("Select a chat to see token usage and quota.");
@@ -529,8 +552,25 @@ function clearStoredToken() {
   }
 }
 
-function showTokenCard(show) {
-  authCard.classList.toggle("hidden", !show);
+function requestTokenFromUser(reason) {
+  const suffix = reason ? ` (${reason})` : "";
+  const entered = window.prompt(`Enter APP_TOKEN once${suffix}:`, "");
+  if (typeof entered !== "string") {
+    return "";
+  }
+  return entered.trim();
+}
+
+function tryAuthenticateWithToken(token) {
+  const value = (token || "").trim();
+  if (!value) {
+    return false;
+  }
+  pendingAuthToken = value;
+  send({ type: "auth", token: value });
+  const liveState = appServerEnabled ? (appServerReady ? "live-on" : "live-starting") : "live-off";
+  setStatus(`Authenticating (${liveState})`, true);
+  return true;
 }
 
 function stamp() {
@@ -751,7 +791,7 @@ function renderChatList() {
     btn.appendChild(preview);
 
     btn.addEventListener("click", () => {
-      selectChat(chat.id, true, { focusComposer: true });
+      selectChat(chat.id, true, { focusComposer: true, openChatView: true });
     });
 
     chatList.appendChild(btn);
@@ -1096,11 +1136,15 @@ function focusComposer() {
 
 function selectChat(chatId, requestDetail, options = {}) {
   const focusOnComposer = Boolean(options.focusComposer);
+  const openChatView = Boolean(options.openChatView);
   selectedChatId = chatId;
   const chat = getChatSummary(chatId);
 
   selectedChatName.textContent = chat ? chat.title : "None";
   selectedChatSource.textContent = sourceLabel(chat);
+  if (chatDetailCaption) {
+    chatDetailCaption.textContent = chat ? sourceLabel(chat) : "Chat view";
+  }
   readOnlyHint.textContent = readOnlyHintText(chat);
   readOnlyHint.classList.toggle("hidden", !chat || !chat.readOnly);
   if (chat) {
@@ -1121,6 +1165,9 @@ function selectChat(chatId, requestDetail, options = {}) {
 
   if (requestDetail && chatId) {
     send({ type: "get_chat", chatId });
+  }
+  if (openChatView) {
+    setChatFocusMode(true);
   }
   if (focusOnComposer && chat) {
     focusComposer();
@@ -1242,20 +1289,19 @@ function handleServerMessage(data) {
     appServerReady = Boolean(data.appServer && data.appServer.ready);
     applyGithubProfileUrl(data.githubProfileUrl || "");
     const storedToken = getStoredToken();
-    if (storedToken && !tokenInput.value) {
-      tokenInput.value = storedToken;
-    }
     if (!fileJumpInput.value && typeof data.defaultCwd === "string" && data.defaultCwd) {
       fileJumpInput.value = data.defaultCwd;
     }
-    showTokenCard(requiresToken && !authed);
     const liveState = appServerEnabled ? (appServerReady ? "live-on" : "live-starting") : "live-off";
     setStatus(requiresToken ? `Connected (token required, ${liveState})` : `Connected (${liveState})`, true);
     setFileRoots(data.browseRoots || []);
-    if (requiresToken && !authed && storedToken) {
-      pendingAuthToken = storedToken;
-      send({ type: "auth", token: storedToken });
-      setStatus(`Authenticating (${liveState})`, true);
+    if (requiresToken && !authed) {
+      const firstToken = storedToken || requestTokenFromUser("");
+      if (tryAuthenticateWithToken(firstToken)) {
+        setActionState();
+        return;
+      }
+      setStatus(`Token required (${liveState})`, true);
       setActionState();
       return;
     }
@@ -1269,8 +1315,7 @@ function handleServerMessage(data) {
 
   if (data.type === "auth/ok") {
     authed = true;
-    showTokenCard(false);
-    storeToken(pendingAuthToken || tokenInput.value);
+    storeToken(pendingAuthToken);
     pendingAuthToken = "";
     setStatus(appServerEnabled ? (appServerReady ? "Authenticated (live-on)" : "Authenticated (live-starting)") : "Authenticated", true);
     if (fileRootSelect.value) {
@@ -1283,7 +1328,6 @@ function handleServerMessage(data) {
 
   if (data.type === "auth/error") {
     authed = false;
-    showTokenCard(true);
     setStatus("Auth failed", true);
     filePreview.textContent = "Authenticate to use file browser.";
     addLogLine(selectedChatId || "global", `Auth error: ${data.error || "unknown"}`);
@@ -1291,6 +1335,13 @@ function handleServerMessage(data) {
     if (errText.includes("token")) {
       clearStoredToken();
       pendingAuthToken = "";
+    }
+    if (requiresToken) {
+      const retryToken = requestTokenFromUser("auth failed");
+      if (tryAuthenticateWithToken(retryToken)) {
+        setActionState();
+        return;
+      }
     }
     setActionState();
     return;
@@ -1448,13 +1499,13 @@ function handleServerMessage(data) {
     approvalsByChat.set(data.chat.id, approvalsByChat.get(data.chat.id) || []);
     renderChatList();
 
-    selectChat(data.chat.id, true, { focusComposer: true });
+    selectChat(data.chat.id, true, { focusComposer: true, openChatView: true });
     return;
   }
 
   if (data.type === "chat/cloned") {
     if (data.chatId) {
-      selectChat(data.chatId, true, { focusComposer: true });
+      selectChat(data.chatId, true, { focusComposer: true, openChatView: true });
     }
     return;
   }
@@ -1463,7 +1514,7 @@ function handleServerMessage(data) {
     const nextChatId = typeof data.chatId === "string" ? data.chatId : "";
     if (nextChatId) {
       addLogLine(nextChatId, "live thread activated");
-      selectChat(nextChatId, true, { focusComposer: true });
+      selectChat(nextChatId, true, { focusComposer: true, openChatView: true });
     }
     return;
   }
@@ -1636,7 +1687,6 @@ function connect() {
   ws.addEventListener("close", () => {
     authed = false;
     setStatus("Disconnected", false);
-    showTokenCard(requiresToken);
     filePreview.textContent = "Disconnected.";
     setActionState();
     setTimeout(connect, 2000);
@@ -1657,7 +1707,7 @@ runBtn.addEventListener("click", () => {
     const linked = linkedLiveChatId(selected);
     const key = sourceKey(selected);
     if (linked) {
-      selectChat(linked, true, { focusComposer: true });
+      selectChat(linked, true, { focusComposer: true, openChatView: true });
       return;
     }
     if ((key === "vscode" || key === "codex") && appServerEnabled && appServerReady) {
@@ -1728,10 +1778,22 @@ cancelBtn.addEventListener("click", () => {
   addLogLine(selectedChatId, "stop requested...");
 });
 
-authBtn.addEventListener("click", () => {
-  pendingAuthToken = tokenInput.value.trim();
-  send({ type: "auth", token: pendingAuthToken });
-});
+if (backToChatsBtn) {
+  backToChatsBtn.addEventListener("click", () => {
+    setChatFocusMode(false);
+    if (chatsCard) {
+      chatsCard.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+    } else if (mainHeader) {
+      mainHeader.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+    }
+  });
+}
 
 createChatBtn.addEventListener("click", () => {
   if (!authed) {

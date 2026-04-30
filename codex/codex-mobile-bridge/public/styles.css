@@ -109,6 +109,27 @@ h1 {
   gap: 0.5rem;
 }
 
+.chat-detail-top {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.chat-detail-top .btn {
+  max-width: 170px;
+  padding: 0.5rem 0.62rem;
+  font-size: 0.78rem;
+}
+
+#chatDetailCaption {
+  margin: 0;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .top-link {
   width: auto;
   text-decoration: none;
@@ -384,6 +405,21 @@ textarea {
   max-height: 42vh;
   overflow: auto;
   padding-right: 0.1rem;
+}
+
+body.chat-focus #mainHeader,
+body.chat-focus #chatsCard,
+body.chat-focus #filesCard,
+body.chat-focus #opsCard {
+  display: none;
+}
+
+body.chat-focus .chat-detail-top {
+  display: flex;
+}
+
+body.chat-focus .app {
+  padding-top: 0.4rem;
 }
 
 .chat-item {
