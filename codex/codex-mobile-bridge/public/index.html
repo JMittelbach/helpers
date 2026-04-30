@@ -42,6 +42,31 @@
       </section>
 
       <section class="card">
+        <h2>Tokens</h2>
+        <p id="tokenSourceLine" class="meta-line">Select a chat to see token usage and quota.</p>
+        <div class="token-grid">
+          <article class="token-box">
+            <p class="token-label">Total Tokens</p>
+            <p id="tokenTotalValue" class="token-value">-</p>
+          </article>
+          <article class="token-box">
+            <p class="token-label">Last Run Tokens</p>
+            <p id="tokenLastValue" class="token-value">-</p>
+          </article>
+          <article class="token-box">
+            <p class="token-label">Context Window</p>
+            <p id="tokenContextValue" class="token-value">-</p>
+          </article>
+          <article class="token-box">
+            <p class="token-label">Context Used</p>
+            <p id="tokenContextPercentValue" class="token-value">-</p>
+          </article>
+        </div>
+        <p id="tokenBreakdownLine" class="meta-line">Input/Output breakdown appears with token_count events.</p>
+        <p id="tokenQuotaLine" class="meta-line">Quota: waiting for rate-limit data.</p>
+      </section>
+
+      <section class="card">
         <h2>Chats</h2>
         <div class="row">
           <input id="chatTitleInput" type="text" placeholder="New chat title" />

@@ -261,8 +261,7 @@ function normalizeTokenStats(rawStats) {
   const primary = normalizeRateLimitBucket(rawStats.rateLimits?.primary || rawStats.primary);
   const secondary = normalizeRateLimitBucket(rawStats.rateLimits?.secondary || rawStats.secondary);
   const credits = normalizeCredits(rawStats.rateLimits?.credits || rawStats.credits);
-  const updatedAt =
-    typeof rawStats.updatedAt === "string" && rawStats.updatedAt ? rawStats.updatedAt : nowIso();
+  const updatedAt = typeof rawStats.updatedAt === "string" && rawStats.updatedAt ? rawStats.updatedAt : null;
   const source = typeof rawStats.source === "string" && rawStats.source ? rawStats.source : "token_count";
 
   if (!total && !last && modelContextWindow === null && !primary && !secondary && !credits) {
@@ -796,7 +795,8 @@ function restoreChats() {
             mode: entry.mode === "workspace-write" ? "workspace-write" : "read-only",
             logs: Array.isArray(entry.logs) ? entry.logs.slice(-MAX_LOG_LINES) : [],
             messages: Array.isArray(entry.messages) ? entry.messages.slice(-MAX_MESSAGES_PER_CHAT) : [],
-            runs: Array.isArray(entry.runs) ? entry.runs.slice(-MAX_RUNS_PER_CHAT) : []
+            runs: Array.isArray(entry.runs) ? entry.runs.slice(-MAX_RUNS_PER_CHAT) : [],
+            tokenStats: normalizeTokenStats(entry.tokenStats)
           };
 
           chats.set(chat.id, chat);
@@ -855,6 +855,7 @@ function cloneAnyChatToLocal(sourceChat, requestedTitle) {
   }
 
   chat.mode = "read-only";
+  chat.tokenStats = normalizeTokenStats(sourceChat && sourceChat.tokenStats);
   chat.logs = [
     `[clone] source=${sourceChat?.id || "unknown"}`,
     `[clone] title=${sourceTitle}`
@@ -1471,6 +1472,7 @@ function parseCodexSessionChatFromFile(filePath, stat, indexMeta) {
   let taskStartedCount = 0;
   let taskCompleteCount = 0;
   let lastOpenTurnId = "";
+  let tokenStats = null;
 
   for (const line of lines) {
     const event = safeJsonParse(line);
@@ -1488,6 +1490,16 @@ function parseCodexSessionChatFromFile(filePath, stat, indexMeta) {
     if (event.type === "event_msg" && event.payload && typeof event.payload === "object") {
       const evtType = event.payload.type;
       const turnId = typeof event.payload.turn_id === "string" ? event.payload.turn_id : "";
+      if (evtType === "token_count") {
+        const nextTokenStats = parseTokenCountPayload(
+          event.payload,
+          typeof event.timestamp === "string" ? event.timestamp : toIsoFromAny(lastTs, stat.mtimeMs)
+        );
+        if (nextTokenStats) {
+          tokenStats = nextTokenStats;
+        }
+        continue;
+      }
       if (evtType === "task_started") {
         taskStartedCount += 1;
         if (turnId) {
@@ -1581,6 +1593,7 @@ function parseCodexSessionChatFromFile(filePath, stat, indexMeta) {
     ],
     messages,
     runs: [],
+    tokenStats,
     mirror: {
       sessionId,
       path: filePath,
@@ -1596,6 +1609,11 @@ function parseCodexSessionChatFromFile(filePath, stat, indexMeta) {
 function mirrorSignature(chat) {
   const lastUser = lastMessageByRole(chat, "user");
   const lastAssistant = lastMessageByRole(chat, "assistant");
+  const totalTokens =
+    chat && chat.tokenStats && chat.tokenStats.total ? chat.tokenStats.total.totalTokens || 0 : 0;
+  const lastTokens =
+    chat && chat.tokenStats && chat.tokenStats.last ? chat.tokenStats.last.totalTokens || 0 : 0;
+  const tokenUpdatedAt = chat && chat.tokenStats && chat.tokenStats.updatedAt ? chat.tokenStats.updatedAt : "";
   return [
     chat.updatedAt,
     chat.status,
@@ -1605,6 +1623,7 @@ function mirrorSignature(chat) {
     chat.lastError,
     chat.title,
     chat.source,
+    `${totalTokens}:${lastTokens}:${tokenUpdatedAt}`,
     `${lastUser.length}:${lastAssistant.length}`,
     lastUser.slice(-220),
     lastAssistant.slice(-220)
@@ -1776,7 +1795,10 @@ function appChatSignature(chat) {
     chat.title,
     chat.lastError || "",
     chat.cwd || "",
-    chat.messageCount || chat.messages.length
+    chat.messageCount || chat.messages.length,
+    chat.tokenStats && chat.tokenStats.total ? chat.tokenStats.total.totalTokens || 0 : 0,
+    chat.tokenStats && chat.tokenStats.last ? chat.tokenStats.last.totalTokens || 0 : 0,
+    chat.tokenStats && chat.tokenStats.updatedAt ? chat.tokenStats.updatedAt : ""
   ].join("|");
 }
 
@@ -1802,7 +1824,8 @@ function buildAppServerChatFromThread(thread, existingChat) {
         mode: "workspace-write",
         logs: [],
         messages: [],
-        runs: []
+        runs: [],
+        tokenStats: null
       };
 
   chat.source = "app-server-thread";
@@ -1886,6 +1909,7 @@ function hydrateChatFromThreadRead(chat, thread) {
   }
 
   for (const turn of thread.turns) {
+    const turnTokenStats = extractTokenStatsFromTurn(turn);
     const run = {
       id: turn.id || randomId("turn"),
       createdAt: toIsoFromAny(turn.startedAt, Date.now()),
@@ -1898,8 +1922,14 @@ function hydrateChatFromThreadRead(chat, thread) {
       exitCode: null,
       signal: null,
       finalText: "",
-      error: turn && turn.error && typeof turn.error.message === "string" ? turn.error.message : ""
+      error: turn && turn.error && typeof turn.error.message === "string" ? turn.error.message : "",
+      tokenUsage: turnTokenStats ? turnTokenStats.last || turnTokenStats.total || null : null,
+      tokenStatsUpdatedAt: turnTokenStats ? turnTokenStats.updatedAt : null
     };
+
+    if (turnTokenStats) {
+      chat.tokenStats = turnTokenStats;
+    }
 
     for (const item of Array.isArray(turn.items) ? turn.items : []) {
       if (!item || typeof item !== "object") {
@@ -2068,6 +2098,7 @@ function registerPendingApproval(method, requestId, params) {
       logs: [],
       messages: [],
       runs: [],
+      tokenStats: null,
       appThread: {
         threadId,
         source: "unknown",
@@ -2122,7 +2153,9 @@ function handleTurnStartedNotification(params) {
       exitCode: null,
       signal: null,
       finalText: "",
-      error: ""
+      error: "",
+      tokenUsage: null,
+      tokenStatsUpdatedAt: null
     });
   }
 
@@ -2154,6 +2187,7 @@ function handleTurnCompletedNotification(params) {
   }
 
   const run = findRunForTurn(chat, turn.id);
+  const turnTokenStats = extractTokenStatsFromTurn(turn);
   const runStatus = turnStatusToRunStatus(turn.status);
   const finalText = run ? run.finalText || "" : "";
   const failed = runStatus === "failed";
@@ -2164,6 +2198,14 @@ function handleTurnCompletedNotification(params) {
     if (turn && turn.error && typeof turn.error.message === "string") {
       run.error = turn.error.message;
     }
+    if (turnTokenStats) {
+      run.tokenUsage = turnTokenStats.last || turnTokenStats.total || run.tokenUsage || null;
+      run.tokenStatsUpdatedAt = turnTokenStats.updatedAt;
+    }
+  }
+
+  if (turnTokenStats) {
+    chat.tokenStats = turnTokenStats;
   }
 
   chat.status = failed ? "failed" : "idle";
@@ -3257,7 +3299,9 @@ wss.on("connection", (ws) => {
               exitCode: null,
               signal: null,
               finalText: "",
-              error: ""
+              error: "",
+              tokenUsage: null,
+              tokenStatsUpdatedAt: null
             });
           }
 
@@ -3346,7 +3390,9 @@ wss.on("connection", (ws) => {
       exitCode: null,
       signal: null,
       finalText: "",
-      error: ""
+      error: "",
+      tokenUsage: null,
+      tokenStatsUpdatedAt: null
     });
 
     runtime.stdoutBuffer = "";
@@ -3388,6 +3434,7 @@ wss.on("connection", (ws) => {
 
         try {
           const event = JSON.parse(line);
+          applyTokenCountEvent(chat, runId, event);
           const textUpdate = extractAssistantText(event);
           if (textUpdate.delta) {
             runtime.streamingText += textUpdate.delta;
@@ -3458,6 +3505,7 @@ wss.on("connection", (ws) => {
         addLogLine(chat, tail);
         try {
           const event = JSON.parse(tail);
+          applyTokenCountEvent(chat, runId, event);
           const textUpdate = extractAssistantText(event);
           if (textUpdate.delta) {
             runtime.streamingText += textUpdate.delta;

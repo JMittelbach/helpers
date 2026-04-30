@@ -237,6 +237,37 @@ textarea {
   color: var(--text-soft);
 }
 
+.token-grid {
+  margin-top: 0.4rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.token-box {
+  margin: 0;
+  padding: 0.45rem 0.5rem;
+  border: 1px solid rgba(126, 163, 206, 0.2);
+  border-radius: 10px;
+  background: rgba(8, 14, 27, 0.7);
+}
+
+.token-label {
+  margin: 0;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-soft);
+}
+
+.token-value {
+  margin: 0.18rem 0 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #def0ff;
+  word-break: break-word;
+}
+
 #createChatBtn,
 #authBtn {
   max-width: 108px;
