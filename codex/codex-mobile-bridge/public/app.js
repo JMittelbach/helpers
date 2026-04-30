@@ -200,6 +200,295 @@ function applyGithubProfileUrl(rawUrl) {
   }
 }
 
+function toNumberOrNull(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    return null;
+  }
+  return n;
+}
+
+function toIntOrNull(value) {
+  const n = toNumberOrNull(value);
+  if (n === null) {
+    return null;
+  }
+  return Math.max(0, Math.round(n));
+}
+
+function normalizeUsage(raw) {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const inputTokens = toIntOrNull(raw.inputTokens ?? raw.input_tokens) || 0;
+  const cachedInputTokens = toIntOrNull(raw.cachedInputTokens ?? raw.cached_input_tokens) || 0;
+  const outputTokens = toIntOrNull(raw.outputTokens ?? raw.output_tokens) || 0;
+  const reasoningOutputTokens = toIntOrNull(raw.reasoningOutputTokens ?? raw.reasoning_output_tokens) || 0;
+  const explicitTotal = toIntOrNull(raw.totalTokens ?? raw.total_tokens);
+  const totalTokens =
+    explicitTotal !== null ? explicitTotal : inputTokens + cachedInputTokens + outputTokens + reasoningOutputTokens;
+  if (totalTokens <= 0 && inputTokens <= 0 && cachedInputTokens <= 0 && outputTokens <= 0 && reasoningOutputTokens <= 0) {
+    return null;
+  }
+  return {
+    inputTokens,
+    cachedInputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens
+  };
+}
+
+function normalizeRateLimits(raw) {
+  if (!raw || typeof raw !== "object") {
+    return {};
+  }
+  const pickBucket = (value) => {
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+    const usedPercent = toNumberOrNull(value.usedPercent ?? value.used_percent);
+    const windowMinutes = toIntOrNull(value.windowMinutes ?? value.window_minutes);
+    const resetsAt = toIntOrNull(value.resetsAt ?? value.resets_at);
+    if (usedPercent === null && windowMinutes === null && resetsAt === null) {
+      return null;
+    }
+    return {
+      usedPercent: usedPercent === null ? null : Math.max(0, Math.min(100, Math.round(usedPercent * 10) / 10)),
+      windowMinutes,
+      resetsAt
+    };
+  };
+
+  const creditsRaw = raw.credits || {};
+  const hasCredits = typeof creditsRaw.hasCredits === "boolean" ? creditsRaw.hasCredits : creditsRaw.has_credits;
+  const unlimited = typeof creditsRaw.unlimited === "boolean" ? creditsRaw.unlimited : null;
+  const balance = creditsRaw.balance === undefined || creditsRaw.balance === null ? null : String(creditsRaw.balance);
+  const credits =
+    typeof hasCredits === "boolean" || typeof unlimited === "boolean" || balance !== null
+      ? {
+          hasCredits: typeof hasCredits === "boolean" ? hasCredits : null,
+          unlimited: typeof unlimited === "boolean" ? unlimited : null,
+          balance
+        }
+      : null;
+
+  const normalized = {};
+  const primary = pickBucket(raw.primary);
+  const secondary = pickBucket(raw.secondary);
+  if (primary) {
+    normalized.primary = primary;
+  }
+  if (secondary) {
+    normalized.secondary = secondary;
+  }
+  if (credits) {
+    normalized.credits = credits;
+  }
+  return normalized;
+}
+
+function normalizeTokenStats(raw) {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const total = normalizeUsage(raw.total || raw.totalUsage);
+  const last = normalizeUsage(raw.last || raw.lastUsage);
+  const modelContextWindow = toIntOrNull(raw.modelContextWindow ?? raw.model_context_window);
+  const rateLimits = normalizeRateLimits(raw.rateLimits || raw.rate_limits || {});
+  const updatedAt =
+    typeof raw.updatedAt === "string" && raw.updatedAt
+      ? raw.updatedAt
+      : typeof raw.timestamp === "string" && raw.timestamp
+        ? raw.timestamp
+        : null;
+  if (!total && !last && modelContextWindow === null && Object.keys(rateLimits).length === 0) {
+    return null;
+  }
+  return {
+    source: typeof raw.source === "string" && raw.source ? raw.source : "token_count",
+    updatedAt,
+    total,
+    last,
+    modelContextWindow,
+    rateLimits
+  };
+}
+
+function parseTokenStatsFromEvent(event) {
+  if (!event || typeof event !== "object") {
+    return null;
+  }
+  if (event.type !== "event_msg" || !event.payload || event.payload.type !== "token_count") {
+    return null;
+  }
+  const payload = event.payload;
+  const info = payload.info && typeof payload.info === "object" ? payload.info : {};
+  return normalizeTokenStats({
+    source: "token_count",
+    updatedAt: typeof event.timestamp === "string" ? event.timestamp : new Date().toISOString(),
+    total: info.total_token_usage ?? info.totalTokenUsage,
+    last: info.last_token_usage ?? info.lastTokenUsage,
+    modelContextWindow: info.model_context_window ?? info.modelContextWindow,
+    rateLimits: payload.rate_limits ?? payload.rateLimits
+  });
+}
+
+function formatInt(value) {
+  const n = toIntOrNull(value);
+  if (n === null) {
+    return "-";
+  }
+  return n.toLocaleString("en-US");
+}
+
+function formatPercent(value) {
+  const n = toNumberOrNull(value);
+  if (n === null) {
+    return "-";
+  }
+  return `${Math.round(n * 10) / 10}%`;
+}
+
+function formatResetTs(seconds) {
+  const n = toIntOrNull(seconds);
+  if (n === null) {
+    return "-";
+  }
+  const d = new Date(n * 1000);
+  if (Number.isNaN(d.getTime())) {
+    return "-";
+  }
+  return d.toLocaleString("en-US", {
+    hour12: false,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function setTokenPanelEmpty(message) {
+  tokenSourceLine.textContent = message;
+  tokenTotalValue.textContent = "-";
+  tokenLastValue.textContent = "-";
+  tokenContextValue.textContent = "-";
+  tokenContextPercentValue.textContent = "-";
+  tokenBreakdownLine.textContent = "Input/Output breakdown appears with token_count events.";
+  tokenQuotaLine.textContent = "Quota: waiting for rate-limit data.";
+}
+
+function mergeTokenStats(baseStats, incomingStats) {
+  const base = normalizeTokenStats(baseStats || {});
+  const incoming = normalizeTokenStats(incomingStats || {});
+  if (!base) {
+    return incoming;
+  }
+  if (!incoming) {
+    return base;
+  }
+  return {
+    source: incoming.source || base.source,
+    updatedAt: incoming.updatedAt || base.updatedAt,
+    total: incoming.total || base.total || null,
+    last: incoming.last || base.last || null,
+    modelContextWindow: incoming.modelContextWindow || base.modelContextWindow || null,
+    rateLimits: {
+      ...(base.rateLimits || {}),
+      ...(incoming.rateLimits || {})
+    }
+  };
+}
+
+function applyTokenStatsToChat(chatId, incomingStats) {
+  if (!chatId) {
+    return;
+  }
+  const normalized = normalizeTokenStats(incomingStats);
+  if (!normalized) {
+    return;
+  }
+  const summary = chats.get(chatId);
+  if (summary) {
+    summary.tokenStats = mergeTokenStats(summary.tokenStats, normalized);
+    chats.set(chatId, summary);
+  }
+
+  const detail = details.get(chatId);
+  if (detail) {
+    detail.tokenStats = mergeTokenStats(detail.tokenStats, normalized);
+    details.set(chatId, detail);
+  }
+}
+
+function renderTokenPanel() {
+  const chat = getChatSummary(selectedChatId);
+  if (!chat) {
+    setTokenPanelEmpty("Select a chat to see token usage and quota.");
+    return;
+  }
+
+  const detail = details.get(chat.id);
+  const tokenStats = normalizeTokenStats((detail && detail.tokenStats) || chat.tokenStats);
+  if (!tokenStats) {
+    setTokenPanelEmpty("No token telemetry yet for this chat.");
+    return;
+  }
+
+  const total = tokenStats.total || null;
+  const last = tokenStats.last || null;
+  const context = toIntOrNull(tokenStats.modelContextWindow);
+  const contextTotal = total ? toIntOrNull(total.totalTokens) : null;
+  const contextPct =
+    context && context > 0 && contextTotal !== null ? Math.min(100, Math.max(0, (contextTotal / context) * 100)) : null;
+
+  const source = sourceLabel(chat);
+  const updated = tokenStats.updatedAt ? formatShortTime(tokenStats.updatedAt) : "-";
+  tokenSourceLine.textContent = `${source} • updated ${updated}`;
+  tokenTotalValue.textContent = total ? formatInt(total.totalTokens) : "-";
+  tokenLastValue.textContent = last ? formatInt(last.totalTokens) : "-";
+  tokenContextValue.textContent = context ? formatInt(context) : "-";
+  tokenContextPercentValue.textContent = contextPct === null ? "-" : formatPercent(contextPct);
+
+  if (total) {
+    tokenBreakdownLine.textContent =
+      `Total: in ${formatInt(total.inputTokens)} • cached ${formatInt(total.cachedInputTokens)} • out ${formatInt(
+        total.outputTokens
+      )} • reasoning ${formatInt(total.reasoningOutputTokens)}`;
+  } else if (last) {
+    tokenBreakdownLine.textContent =
+      `Last: in ${formatInt(last.inputTokens)} • cached ${formatInt(last.cachedInputTokens)} • out ${formatInt(
+        last.outputTokens
+      )} • reasoning ${formatInt(last.reasoningOutputTokens)}`;
+  } else {
+    tokenBreakdownLine.textContent = "Input/Output breakdown appears with token_count events.";
+  }
+
+  const rate = tokenStats.rateLimits || {};
+  const primary = rate.primary || null;
+  const secondary = rate.secondary || null;
+  const credits = rate.credits || null;
+  const quotaParts = [];
+
+  if (primary) {
+    quotaParts.push(`Primary ${formatPercent(primary.usedPercent)} (reset ${formatResetTs(primary.resetsAt)})`);
+  }
+  if (secondary) {
+    quotaParts.push(`Secondary ${formatPercent(secondary.usedPercent)} (reset ${formatResetTs(secondary.resetsAt)})`);
+  }
+  if (credits) {
+    const balance = credits.balance || "-";
+    const creditLabel =
+      credits.unlimited === true ? "unlimited" : credits.hasCredits === true ? "credits-on" : "credits-off";
+    quotaParts.push(`Credits ${creditLabel} (${balance})`);
+  }
+
+  tokenQuotaLine.textContent =
+    quotaParts.length > 0
+      ? `Quota: ${quotaParts.join(" • ")}`
+      : "Quota: API total balance is not exposed here, only token/rate-limit telemetry.";
+}
+
 function getStoredToken() {
   try {
     return localStorage.getItem(TOKEN_STORAGE_KEY) || "";
@@ -393,9 +682,11 @@ function appendMessage(chatId, role, text, runId) {
 
 function mergeSummary(summary) {
   const prev = chats.get(summary.id) || {};
+  const mergedTokenStats = mergeTokenStats(prev.tokenStats, summary.tokenStats);
   chats.set(summary.id, {
     ...prev,
-    ...summary
+    ...summary,
+    tokenStats: mergedTokenStats
   });
 }
 
@@ -409,6 +700,8 @@ function renderChatList() {
     empty.className = "chat-empty";
     empty.textContent = "No chats match this filter.";
     chatList.appendChild(empty);
+    renderTokenPanel();
+    refreshFileQuickPaths();
     return;
   }
 
@@ -451,6 +744,7 @@ function renderChatList() {
 
     chatList.appendChild(btn);
   });
+  renderTokenPanel();
   refreshFileQuickPaths();
 }
 
@@ -784,6 +1078,7 @@ function selectChat(chatId, requestDetail) {
   renderMessages();
   renderLogs();
   renderFinal();
+  renderTokenPanel();
   refreshFileQuickPaths();
   setActionState();
   renderApprovals();
@@ -795,17 +1090,30 @@ function selectChat(chatId, requestDetail) {
 
 function applyDetail(detail) {
   approvalsByChat.set(detail.id, normalizeApprovalList(detail.approvals || []));
+  const prevDetail = details.get(detail.id) || {};
+  const mergedTokenStats = mergeTokenStats(prevDetail.tokenStats, detail.tokenStats);
   details.set(detail.id, {
     ...detail,
     logs: Array.isArray(detail.logs) ? detail.logs.slice() : [],
     messages: Array.isArray(detail.messages) ? detail.messages.slice() : [],
-    runs: Array.isArray(detail.runs) ? detail.runs.slice() : []
+    runs: Array.isArray(detail.runs) ? detail.runs.slice() : [],
+    tokenStats: mergedTokenStats
   });
   mergeSummary(detail);
 }
 
 function eventSummary(event) {
   const eventType = event.type || event.method || "unknown";
+
+  if (eventType === "event_msg" && event.payload && event.payload.type === "token_count") {
+    const info = event.payload.info || {};
+    const total = info.total_token_usage || {};
+    const totalTokens = total.total_tokens;
+    if (typeof totalTokens === "number") {
+      return `token_count total=${totalTokens}`;
+    }
+    return "token_count";
+  }
 
   if (eventType === "item/agentMessage/delta") {
     const delta = event.params?.delta || "";
@@ -838,6 +1146,13 @@ function eventSummary(event) {
 function applyRunEvent(chatId, runId, event) {
   const detail = ensureChatDetail(chatId);
   const eventType = event.type || event.method || "unknown";
+  const tokenStats = parseTokenStatsFromEvent(event);
+  if (tokenStats) {
+    applyTokenStatsToChat(chatId, tokenStats);
+    if (selectedChatId === chatId) {
+      renderTokenPanel();
+    }
+  }
 
   if (eventType === "item/agentMessage/delta") {
     const key = `${chatId}:${runId}`;
@@ -1128,6 +1443,7 @@ function handleServerMessage(data) {
       selectedChatSource.textContent = sourceLabel(data.chat);
       readOnlyHint.textContent = readOnlyHintText(data.chat);
       readOnlyHint.classList.toggle("hidden", !data.chat.readOnly);
+      renderTokenPanel();
       setActionState();
       renderApprovals();
     }
@@ -1154,6 +1470,7 @@ function handleServerMessage(data) {
       renderMessages();
       renderLogs();
       renderFinal();
+      renderTokenPanel();
       setActionState();
       renderApprovals();
     }
@@ -1504,6 +1821,7 @@ presets.forEach((preset) => {
   presetsWrap.appendChild(btn);
 });
 
+renderTokenPanel();
 connect();
 setInterval(() => {
   send({ type: "ping" });

@@ -2315,6 +2315,69 @@ function handleAppServerNotification(message) {
     return;
   }
 
+  if (method === "event_msg" || method === "token_count" || method === "turn/token_count") {
+    const threadId = typeof params.threadId === "string" ? params.threadId : "";
+    const turnId = typeof params.turnId === "string" ? params.turnId : "";
+    if (!threadId) {
+      return;
+    }
+    const chatId = appChatIdForThread(threadId);
+    const chat = appServerChats.get(chatId);
+    if (!chat) {
+      return;
+    }
+    const payload = method === "event_msg" ? params.payload : { type: "token_count", ...params };
+    const tokenStats = parseTokenCountPayload(payload, nowIso());
+    if (!tokenStats) {
+      return;
+    }
+    chat.tokenStats = tokenStats;
+    if (turnId) {
+      const run = findRunForTurn(chat, turnId);
+      if (run) {
+        run.tokenUsage = tokenStats.last || run.tokenUsage || null;
+        run.tokenStatsUpdatedAt = tokenStats.updatedAt || null;
+      }
+    }
+    chat.updatedAt = nowIso();
+    broadcastToAuthed({ type: "chat/updated", chat: toChatSummary(chat) });
+    broadcastToAuthed({
+      type: "run/event",
+      chatId,
+      runId: turnId || chat.currentRunId || null,
+      event: {
+        type: "event_msg",
+        timestamp: tokenStats.updatedAt || nowIso(),
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: tokenStats.total
+              ? {
+                  input_tokens: tokenStats.total.inputTokens,
+                  cached_input_tokens: tokenStats.total.cachedInputTokens,
+                  output_tokens: tokenStats.total.outputTokens,
+                  reasoning_output_tokens: tokenStats.total.reasoningOutputTokens,
+                  total_tokens: tokenStats.total.totalTokens
+                }
+              : null,
+            last_token_usage: tokenStats.last
+              ? {
+                  input_tokens: tokenStats.last.inputTokens,
+                  cached_input_tokens: tokenStats.last.cachedInputTokens,
+                  output_tokens: tokenStats.last.outputTokens,
+                  reasoning_output_tokens: tokenStats.last.reasoningOutputTokens,
+                  total_tokens: tokenStats.last.totalTokens
+                }
+              : null,
+            model_context_window: tokenStats.modelContextWindow
+          },
+          rate_limits: tokenStats.rateLimits || {}
+        }
+      }
+    });
+    return;
+  }
+
   if (method === "item/agentMessage/delta") {
     const threadId = typeof params.threadId === "string" ? params.threadId : "";
     const turnId = typeof params.turnId === "string" ? params.turnId : "";

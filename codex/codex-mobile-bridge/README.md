@@ -16,6 +16,7 @@ Mobile-first web app to run Codex on your Mac from a phone browser.
 - Built-in file browser for allowed roots (including VS Code/Codex folders)
 - Quick-path file navigation chips + direct path jump in mobile UI
 - GitHub profile shortcut link in header (auto-detected or configurable)
+- Token menu: total/last tokens, context usage, and quota/rate-limit telemetry
 - Optional token auth (`APP_TOKEN`)
 - Workspace safety guard via `ALLOWED_ROOTS`
 - Optional Cloudflare quick tunnel for remote access
