@@ -165,6 +165,214 @@ function trimArray(arr, maxSize) {
   }
 }
 
+function toNumberOrNull(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return null;
+  }
+  return num;
+}
+
+function toIntOrNull(value) {
+  const num = toNumberOrNull(value);
+  if (num === null) {
+    return null;
+  }
+  return Math.max(0, Math.round(num));
+}
+
+function normalizeTokenUsage(rawUsage) {
+  if (!rawUsage || typeof rawUsage !== "object") {
+    return null;
+  }
+
+  const inputTokens = toIntOrNull(rawUsage.input_tokens ?? rawUsage.inputTokens) || 0;
+  const cachedInputTokens = toIntOrNull(rawUsage.cached_input_tokens ?? rawUsage.cachedInputTokens) || 0;
+  const outputTokens = toIntOrNull(rawUsage.output_tokens ?? rawUsage.outputTokens) || 0;
+  const reasoningOutputTokens =
+    toIntOrNull(rawUsage.reasoning_output_tokens ?? rawUsage.reasoningOutputTokens) || 0;
+  const explicitTotal = toIntOrNull(rawUsage.total_tokens ?? rawUsage.totalTokens);
+  const totalTokens =
+    explicitTotal !== null ? explicitTotal : inputTokens + cachedInputTokens + outputTokens + reasoningOutputTokens;
+
+  if (totalTokens === 0 && inputTokens === 0 && cachedInputTokens === 0 && outputTokens === 0 && reasoningOutputTokens === 0) {
+    return null;
+  }
+
+  return {
+    inputTokens,
+    cachedInputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens
+  };
+}
+
+function normalizeRateLimitBucket(rawBucket) {
+  if (!rawBucket || typeof rawBucket !== "object") {
+    return null;
+  }
+
+  const usedPercentRaw = toNumberOrNull(rawBucket.used_percent ?? rawBucket.usedPercent);
+  const windowMinutes = toIntOrNull(rawBucket.window_minutes ?? rawBucket.windowMinutes);
+  const resetsAt = toIntOrNull(rawBucket.resets_at ?? rawBucket.resetsAt);
+
+  if (usedPercentRaw === null && windowMinutes === null && resetsAt === null) {
+    return null;
+  }
+
+  const usedPercent = usedPercentRaw === null ? null : Math.max(0, Math.min(100, Math.round(usedPercentRaw * 10) / 10));
+  return {
+    usedPercent,
+    windowMinutes,
+    resetsAt
+  };
+}
+
+function normalizeCredits(rawCredits) {
+  if (!rawCredits || typeof rawCredits !== "object") {
+    return null;
+  }
+
+  const hasCredits = typeof rawCredits.has_credits === "boolean" ? rawCredits.has_credits : null;
+  const unlimited = typeof rawCredits.unlimited === "boolean" ? rawCredits.unlimited : null;
+  const balance =
+    rawCredits.balance === null || rawCredits.balance === undefined ? null : String(rawCredits.balance);
+
+  if (hasCredits === null && unlimited === null && balance === null) {
+    return null;
+  }
+
+  return {
+    hasCredits,
+    unlimited,
+    balance
+  };
+}
+
+function normalizeTokenStats(rawStats) {
+  if (!rawStats || typeof rawStats !== "object") {
+    return null;
+  }
+
+  const total = normalizeTokenUsage(rawStats.total || rawStats.totalUsage);
+  const last = normalizeTokenUsage(rawStats.last || rawStats.lastUsage);
+  const modelContextWindow = toIntOrNull(rawStats.modelContextWindow || rawStats.model_context_window);
+  const primary = normalizeRateLimitBucket(rawStats.rateLimits?.primary || rawStats.primary);
+  const secondary = normalizeRateLimitBucket(rawStats.rateLimits?.secondary || rawStats.secondary);
+  const credits = normalizeCredits(rawStats.rateLimits?.credits || rawStats.credits);
+  const updatedAt =
+    typeof rawStats.updatedAt === "string" && rawStats.updatedAt ? rawStats.updatedAt : nowIso();
+  const source = typeof rawStats.source === "string" && rawStats.source ? rawStats.source : "token_count";
+
+  if (!total && !last && modelContextWindow === null && !primary && !secondary && !credits) {
+    return null;
+  }
+
+  const rateLimits = {};
+  if (primary) {
+    rateLimits.primary = primary;
+  }
+  if (secondary) {
+    rateLimits.secondary = secondary;
+  }
+  if (credits) {
+    rateLimits.credits = credits;
+  }
+
+  return {
+    source,
+    updatedAt,
+    modelContextWindow,
+    total,
+    last,
+    rateLimits
+  };
+}
+
+function parseTokenCountPayload(payload, timestampHint) {
+  if (!payload || typeof payload !== "object" || payload.type !== "token_count") {
+    return null;
+  }
+
+  const info = payload.info && typeof payload.info === "object" ? payload.info : {};
+  return normalizeTokenStats({
+    source: "token_count",
+    updatedAt: typeof timestampHint === "string" && timestampHint ? timestampHint : nowIso(),
+    modelContextWindow: info.model_context_window ?? info.modelContextWindow,
+    total: info.total_token_usage ?? info.totalTokenUsage,
+    last: info.last_token_usage ?? info.lastTokenUsage,
+    rateLimits: payload.rate_limits ?? payload.rateLimits
+  });
+}
+
+function applyTokenCountEvent(chat, runId, event) {
+  if (!chat || !event || typeof event !== "object") {
+    return false;
+  }
+  if (event.type !== "event_msg") {
+    return false;
+  }
+
+  const tokenStats = parseTokenCountPayload(event.payload, toIsoFromAny(event.timestamp, Date.now()));
+  if (!tokenStats) {
+    return false;
+  }
+
+  chat.tokenStats = tokenStats;
+  const candidateRunId =
+    typeof runId === "string" && runId
+      ? runId
+      : typeof chat.currentRunId === "string" && chat.currentRunId
+        ? chat.currentRunId
+        : "";
+  if (candidateRunId) {
+    const run = findRun(chat, candidateRunId);
+    if (run) {
+      run.tokenUsage = tokenStats.last || run.tokenUsage || null;
+      run.tokenStatsUpdatedAt = tokenStats.updatedAt;
+    }
+  }
+
+  return true;
+}
+
+function extractTokenStatsFromTurn(turn) {
+  if (!turn || typeof turn !== "object") {
+    return null;
+  }
+
+  const usage = turn.tokenUsage || turn.token_usage || turn.usage || null;
+  const total =
+    (usage && (usage.total_token_usage || usage.totalTokenUsage || usage.total)) ||
+    turn.total_token_usage ||
+    turn.totalTokenUsage ||
+    null;
+  const last =
+    (usage && (usage.last_token_usage || usage.lastTokenUsage || usage.last)) ||
+    turn.last_token_usage ||
+    turn.lastTokenUsage ||
+    null;
+  const rateLimits =
+    (usage && (usage.rate_limits || usage.rateLimits || usage.limits)) ||
+    turn.rate_limits ||
+    turn.rateLimits ||
+    null;
+
+  return normalizeTokenStats({
+    source: "turn_usage",
+    updatedAt: toIsoFromAny(turn.completedAt || turn.startedAt, Date.now()),
+    modelContextWindow:
+      (usage && (usage.model_context_window || usage.modelContextWindow)) ||
+      turn.model_context_window ||
+      turn.modelContextWindow ||
+      null,
+    total,
+    last,
+    rateLimits
+  });
+}
+
 function findBundledCodex() {
   const extRoot = path.join(os.homedir(), ".vscode", "extensions");
 
@@ -312,7 +520,8 @@ function makeChat(title) {
     mode: "read-only",
     logs: [],
     messages: [],
-    runs: []
+    runs: [],
+    tokenStats: null
   };
 }
 
@@ -327,6 +536,7 @@ function lastMessageByRole(chat, role) {
 
 function toChatSummary(chat) {
   const linkedLiveChatId = findLinkedLiveChatId(chat);
+  const tokenStats = normalizeTokenStats(chat.tokenStats);
   return {
     id: chat.id,
     source: chat.source || "local",
@@ -340,6 +550,7 @@ function toChatSummary(chat) {
     lastError: chat.lastError,
     cwd: chat.cwd,
     mode: chat.mode,
+    tokenStats,
     messageCount: chat.messages.length,
     runCount: chat.runs.length,
     lastUserMessage: lastMessageByRole(chat, "user"),
