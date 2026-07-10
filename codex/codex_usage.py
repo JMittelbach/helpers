@@ -5,21 +5,16 @@ import datetime as dt
 import glob
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
-try:
-    import tomllib
-except ImportError:
-    tomllib = None
-
-
 AUTH_PATH = os.path.expanduser("~/.codex/auth.json")
-CONFIG_PATH = os.path.expanduser("~/.codex/config.toml")
 SESSIONS_DIR = os.path.expanduser("~/.codex/sessions")
-CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
-
-DEFAULT_MODEL = "gpt-5.3-codex"
+CODEX_USAGE_URLS = (
+    "https://chatgpt.com/backend-api/wham/usage",
+    "https://chatgpt.com/backend-api/api/codex/usage",
+)
 
 
 def fmt_int(value):
@@ -81,40 +76,97 @@ def as_int(value):
         return None
 
 
-def read_config_model():
-    if not tomllib or not os.path.exists(CONFIG_PATH):
+def first_value(mapping, *keys):
+    if not isinstance(mapping, dict):
         return None
+
+    for key in keys:
+        if key in mapping and mapping[key] is not None:
+            return mapping[key]
+
+    return None
+
+
+def reset_seconds(value):
+    direct = as_int(value)
+    if direct is None:
+        return None
+
+    # `reset_at` is an epoch timestamp, while `reset_after_seconds` is a
+    # duration. The caller handles the two forms separately.
+    return direct
+
+
+def parse_usage_window(window):
+    if not isinstance(window, dict):
+        return None, None
+
+    used_percent = as_float(first_value(window, "used_percent", "usedPercent"))
+
+    reset_after = reset_seconds(
+        first_value(window, "reset_after_seconds", "resetAfterSeconds")
+    )
+    if reset_after is not None:
+        return used_percent, max(0, reset_after)
+
+    reset_at = first_value(window, "reset_at", "resetAt")
+    reset_at = reset_seconds(reset_at)
+    if reset_at is not None:
+        return used_percent, max(0, reset_at - int(time.time()))
+
+    return used_percent, None
+
+
+def parse_quota_payload(body, headers):
+    primary_used = as_float(get_header(headers, "x-codex-primary-used-percent"))
+    primary_reset = as_int(
+        get_header(headers, "x-codex-primary-reset-after-seconds")
+    )
+    secondary_used = as_float(get_header(headers, "x-codex-secondary-used-percent"))
+    secondary_reset = as_int(
+        get_header(headers, "x-codex-secondary-reset-after-seconds")
+    )
 
     try:
-        with open(CONFIG_PATH, "rb") as handle:
-            cfg = tomllib.load(handle)
-    except Exception:
-        return None
+        payload = json.loads(body) if isinstance(body, str) else body
+    except (TypeError, ValueError):
+        return primary_used, primary_reset, secondary_used, secondary_reset
 
-    active_profile = cfg.get("profile")
-    profiles = cfg.get("profiles", {})
+    if not isinstance(payload, dict):
+        return primary_used, primary_reset, secondary_used, secondary_reset
 
-    if active_profile and isinstance(profiles, dict):
-        profile_cfg = profiles.get(active_profile, {})
-        if isinstance(profile_cfg, dict) and profile_cfg.get("model"):
-            return profile_cfg["model"]
+    # Current Codex uses `rate_limit`; tolerate the camelCase and plural forms
+    # used by older/proxy responses as well.
+    rate_limit = first_value(
+        payload,
+        "rate_limit",
+        "rateLimit",
+        "rate_limits",
+        "rateLimits",
+    )
+    if not isinstance(rate_limit, dict):
+        return primary_used, primary_reset, secondary_used, secondary_reset
 
-    return cfg.get("model")
+    primary_window = first_value(
+        rate_limit, "primary_window", "primaryWindow", "primary"
+    )
+    secondary_window = first_value(
+        rate_limit, "secondary_window", "secondaryWindow", "secondary"
+    )
 
+    body_primary_used, body_primary_reset = parse_usage_window(primary_window)
+    body_secondary_used, body_secondary_reset = parse_usage_window(secondary_window)
 
-def resolve_model(cli_model):
-    if cli_model:
-        return cli_model
+    if body_primary_used is not None:
+        primary_used = body_primary_used
+    if body_primary_reset is not None:
+        primary_reset = body_primary_reset
+    if body_secondary_used is not None:
+        secondary_used = body_secondary_used
+    if body_secondary_reset is not None:
+        secondary_reset = body_secondary_reset
 
-    env_model = os.environ.get("CODEX_MODEL")
-    if env_model:
-        return env_model
-
-    cfg_model = read_config_model()
-    if cfg_model:
-        return cfg_model
-
-    return DEFAULT_MODEL
+    return primary_used, primary_reset, secondary_used, secondary_reset
 
 
 def read_auth():
@@ -145,56 +197,43 @@ def read_auth():
     return access_token, account_id
 
 
-def fetch_codex_quota(model):
-    access_token, account_id = read_auth()
-
-    payload = {
-        "model": model,
-        "instructions": "You are a minimal assistant.",
-        "input": [
-            {
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_text", "text": "Return only: ok"}],
-            }
-        ],
-        "tools": [],
-        "tool_choice": "auto",
-        "parallel_tool_calls": False,
-        "store": False,
-        "stream": True,
-    }
-
+def auth_headers(access_token, account_id):
     headers = {
         "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream",
-        "OpenAI-Beta": "responses=experimental",
-        "originator": "codex_cli_rs",
-        "User-Agent": "simple-codex-quota/1.2",
-        "session_id": os.urandom(16).hex(),
+        "Accept": "application/json",
+        "User-Agent": "codex-cli",
     }
 
     if account_id:
-        headers["chatgpt-account-id"] = account_id
+        headers["ChatGPT-Account-Id"] = account_id
 
-    request = urllib.request.Request(
-        CODEX_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers=headers,
-        method="POST",
-    )
+    return headers
 
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return response.status, dict(response.headers), None
 
-    except urllib.error.HTTPError as error:
-        body = error.read().decode("utf-8", errors="replace")
-        return error.code, dict(error.headers), body
+def fetch_codex_usage():
+    access_token, account_id = read_auth()
+    last_error = None
 
-    except Exception as error:
-        return "failed", {}, str(error)
+    for url in CODEX_USAGE_URLS:
+        request = urllib.request.Request(
+            url,
+            headers=auth_headers(access_token, account_id),
+            method="GET",
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                body = response.read().decode("utf-8", errors="replace")
+                return response.status, dict(response.headers), body
+
+        except urllib.error.HTTPError as error:
+            body = error.read().decode("utf-8", errors="replace")
+            last_error = f"GET {url} failed: HTTP {error.code}: {body[:500]}"
+
+        except Exception as error:
+            last_error = f"GET {url} failed: {error}"
+
+    return "failed", {}, last_error
 
 
 def parse_time(value):
@@ -430,20 +469,12 @@ def print_daily_chart(daily):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--model",
-        help="Optional internal Codex model for the quota request, e.g. gpt-5.5",
-    )
     args = parser.parse_args()
 
-    model = resolve_model(args.model)
-    _status, headers, error_body = fetch_codex_quota(model)
-
-    primary_used = as_float(get_header(headers, "x-codex-primary-used-percent"))
-    primary_reset = as_int(get_header(headers, "x-codex-primary-reset-after-seconds"))
-
-    secondary_used = as_float(get_header(headers, "x-codex-secondary-used-percent"))
-    secondary_reset = as_int(get_header(headers, "x-codex-secondary-reset-after-seconds"))
+    _status, headers, usage_body = fetch_codex_usage()
+    primary_used, primary_reset, secondary_used, secondary_reset = parse_quota_payload(
+        usage_body, headers
+    )
 
     stats = local_token_stats(days=7)
 
@@ -460,10 +491,10 @@ def main():
 
     print_daily_chart(stats["daily"])
 
-    if error_body and primary_used is None and secondary_used is None:
+    if usage_body and primary_used is None and secondary_used is None:
         print()
         print("Error:")
-        print(str(error_body)[:800])
+        print(str(usage_body)[:800])
 
     print()
 

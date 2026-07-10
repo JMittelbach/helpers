@@ -2,7 +2,7 @@
 
 A small helper script that shows your Codex token usage:
 - local tokens from `~/.codex/sessions/*.jsonl`
-- if reachable: quota percentages/reset time from the server
+- if reachable: quota percentages/reset time from Codex's account usage endpoint
 
 ## Files
 
@@ -71,4 +71,5 @@ Last 5h      █░░░░░░░░░░░░░░░░░░░░░�
 Last 7d      █████░░░░░░░░░░░░░░░░░░░░░░░░░  586.914.314
 ```
 
-Note: `no quota data` can appear when server access is currently unavailable.
+Note: `no quota data` can appear when server access is currently unavailable. The
+quota request does not send a prompt and does not depend on the selected model.
