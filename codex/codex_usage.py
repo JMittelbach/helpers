@@ -3,8 +3,11 @@
 import argparse
 import datetime as dt
 import glob
+import hashlib
 import json
 import os
+import math
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -110,6 +113,8 @@ def parse_usage_window(window):
         return used_percent, max(0, reset_after)
 
     reset_at = first_value(window, "reset_at", "resetAt")
+    if reset_at is None:
+        reset_at = first_value(window, "resets_at", "resetsAt")
     reset_at = reset_seconds(reset_at)
     if reset_at is not None:
         return used_percent, max(0, reset_at - int(time.time()))
@@ -117,23 +122,58 @@ def parse_usage_window(window):
     return used_percent, None
 
 
+def window_seconds(window):
+    seconds = first_value(
+        window,
+        "limit_window_seconds",
+        "window_seconds",
+        "windowSeconds",
+    )
+    seconds = as_int(seconds)
+    if seconds is not None:
+        return seconds
+
+    minutes = first_value(window, "window_minutes", "windowMinutes")
+    minutes = as_int(minutes)
+    return minutes * 60 if minutes is not None else None
+
+
+def window_label(seconds):
+    if seconds is None:
+        return None
+
+    if seconds % 86400 == 0:
+        return f"{seconds // 86400}d"
+    if seconds % 3600 == 0:
+        return f"{seconds // 3600}h"
+    if seconds % 60 == 0:
+        return f"{seconds // 60}m"
+    return f"{seconds}s"
+
+
 def parse_quota_payload(body, headers):
-    primary_used = as_float(get_header(headers, "x-codex-primary-used-percent"))
-    primary_reset = as_int(
-        get_header(headers, "x-codex-primary-reset-after-seconds")
-    )
-    secondary_used = as_float(get_header(headers, "x-codex-secondary-used-percent"))
-    secondary_reset = as_int(
-        get_header(headers, "x-codex-secondary-reset-after-seconds")
-    )
+    header_quotas = {
+        "5h": (
+            as_float(get_header(headers, "x-codex-primary-used-percent")),
+            as_int(
+                get_header(headers, "x-codex-primary-reset-after-seconds")
+            ),
+        ),
+        "7d": (
+            as_float(get_header(headers, "x-codex-secondary-used-percent")),
+            as_int(
+                get_header(headers, "x-codex-secondary-reset-after-seconds")
+            ),
+        ),
+    }
 
     try:
         payload = json.loads(body) if isinstance(body, str) else body
     except (TypeError, ValueError):
-        return primary_used, primary_reset, secondary_used, secondary_reset
+        return header_quotas
 
     if not isinstance(payload, dict):
-        return primary_used, primary_reset, secondary_used, secondary_reset
+        return header_quotas
 
     # Current Codex uses `rate_limit`; tolerate the camelCase and plural forms
     # used by older/proxy responses as well.
@@ -145,28 +185,106 @@ def parse_quota_payload(body, headers):
         "rateLimits",
     )
     if not isinstance(rate_limit, dict):
-        return primary_used, primary_reset, secondary_used, secondary_reset
+        return header_quotas
 
-    primary_window = first_value(
-        rate_limit, "primary_window", "primaryWindow", "primary"
+    windows = (
+        ("primary_window", "primaryWindow", "primary"),
+        ("secondary_window", "secondaryWindow", "secondary"),
     )
-    secondary_window = first_value(
-        rate_limit, "secondary_window", "secondaryWindow", "secondary"
-    )
+    body_quotas = {}
 
-    body_primary_used, body_primary_reset = parse_usage_window(primary_window)
-    body_secondary_used, body_secondary_reset = parse_usage_window(secondary_window)
+    for index, keys in enumerate(windows):
+        window = first_value(rate_limit, *keys)
+        if not isinstance(window, dict):
+            continue
 
-    if body_primary_used is not None:
-        primary_used = body_primary_used
-    if body_primary_reset is not None:
-        primary_reset = body_primary_reset
-    if body_secondary_used is not None:
-        secondary_used = body_secondary_used
-    if body_secondary_reset is not None:
-        secondary_reset = body_secondary_reset
+        used, reset = parse_usage_window(window)
+        label = window_label(window_seconds(window))
+        if label is None:
+            # Older responses did not expose the window length. Preserve the
+            # historical primary=5h / secondary=7d mapping only as fallback.
+            label = "5h" if index == 0 else "7d"
 
-    return primary_used, primary_reset, secondary_used, secondary_reset
+        body_quotas[label] = (used, reset)
+
+    # A response body with windows is authoritative. In particular, a plan
+    # may expose only one 7d window and set the other window to null.
+    return body_quotas if body_quotas else header_quotas
+
+
+def finite_number(value):
+    if isinstance(value, bool):
+        return None
+    number = as_float(value)
+    return number if number is not None and math.isfinite(number) else None
+
+
+def positive_number(value):
+    number = finite_number(value)
+    if number is None or number <= 0:
+        raise argparse.ArgumentTypeError("must be a finite number greater than zero")
+    return number
+
+
+def credit_reference(balance, account_id, cache_path):
+    """Track the highest observed balance separately for each account."""
+    if not account_id:
+        return None
+    key = hashlib.sha256(str(account_id).encode()).hexdigest()
+    try:
+        with open(cache_path, encoding="utf-8") as handle:
+            saved = json.load(handle)
+        if not isinstance(saved, dict):
+            saved = {}
+    except (OSError, ValueError):
+        saved = {}
+    previous = finite_number(saved.get(key))
+    reference = max(balance, previous or 0)
+    saved[key] = reference
+    directory = os.path.dirname(os.path.abspath(cache_path))
+    temporary = None
+    try:
+        os.makedirs(directory, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as handle:
+            temporary = handle.name
+            json.dump(saved, handle)
+        os.replace(temporary, cache_path)
+    except OSError:
+        return None
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
+    return reference
+
+
+def print_credits(body, total=None, cache_path=None):
+    try:
+        payload = json.loads(body) if isinstance(body, str) else body
+    except (TypeError, ValueError):
+        payload = None
+    credits = payload.get("credits") if isinstance(payload, dict) else None
+    if not isinstance(credits, dict):
+        print("Credits   not provided by Codex API")
+        return
+    if credits.get("unlimited") is True:
+        print("Credits   unlimited")
+        return
+    balance = finite_number(credits.get("balance"))
+    if balance is None:
+        if first_value(credits, "has_credits", "hasCredits") is False:
+            balance = 0.0
+        else:
+            print("Credits   balance not provided by Codex API")
+            return
+    reference = total
+    if reference is None:
+        cache_path = cache_path or os.path.expanduser("~/.cache/codex-usage/credits.json")
+        reference = credit_reference(max(0, balance), payload.get("account_id"), cache_path)
+    if reference is not None and reference > 0:
+        percent = max(0.0, min(100.0, (1 - balance / reference) * 100))
+        print(f"Credits   {quota_bar(percent)}  {percent:5.1f}% used  |  {balance:,.2f} credits remaining")
+    else:
+        print(f"Credits   {balance:,.2f} credits remaining  |  percentage unavailable (no reference total)")
 
 
 def read_auth():
@@ -430,7 +548,7 @@ def local_token_stats(days=7):
 
 def print_quota(label, used_percent, reset_seconds):
     if used_percent is None:
-        print(f"{label:<9} no quota data")
+        print(f"{label:<9} not provided by Codex API")
         return
 
     left_percent = max(0.0, 100.0 - used_percent)
@@ -469,20 +587,30 @@ def print_daily_chart(daily):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--credits-total", type=positive_number,
+                        help="reference credit total for the used percentage")
     args = parser.parse_args()
 
     _status, headers, usage_body = fetch_codex_usage()
-    primary_used, primary_reset, secondary_used, secondary_reset = parse_quota_payload(
-        usage_body, headers
-    )
+    quotas = parse_quota_payload(usage_body, headers)
 
     stats = local_token_stats(days=7)
 
     print()
     print("Codex quota")
     print("=" * 86)
-    print_quota("5h", primary_used, primary_reset)
-    print_quota("7d", secondary_used, secondary_reset)
+    for label in ("5h", "7d"):
+        used, reset = quotas.get(label, (None, None))
+        print_quota(label, used, reset)
+
+    for label, (used, reset) in quotas.items():
+        if label not in {"5h", "7d"}:
+            print_quota(label, used, reset)
+
+    print()
+    print("Codex credits")
+    print("=" * 86)
+    print_credits(usage_body, total=args.credits_total)
 
     print()
     print("Local tokens used")
@@ -491,7 +619,7 @@ def main():
 
     print_daily_chart(stats["daily"])
 
-    if usage_body and primary_used is None and secondary_used is None:
+    if usage_body and all(used is None for used, _reset in quotas.values()):
         print()
         print("Error:")
         print(str(usage_body)[:800])
